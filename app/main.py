@@ -5,7 +5,8 @@ import os
 import socket
 from threading import Thread, Lock
 from queue import Queue
-from datetime import datetime, time
+from datetime import datetime
+import time
 import humanize
 import json
 import re
@@ -16,7 +17,7 @@ class FTPClientApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Advanced FTP Client")
-        self.root.geometry("1100x750")
+        self.root.geometry("1400x750")
 
         self.ftp = None
         self.ftp_lock = Lock()
@@ -176,6 +177,8 @@ class FTPClientApp:
             ("↓ Скачать", self.download_files),
             ("✕ Удалить", self.delete_selected),
             ("🔄 Синхр.", self.sync_folders),
+            ("📋 История", self.show_connection_history),
+            ("⭐ Закладки", self.show_bookmarks),
             ("⚙ Настройки", self.show_settings)
         ]
 
@@ -226,35 +229,65 @@ class FTPClientApp:
         self.worker_thread = Thread(target=worker, daemon=True)
         self.worker_thread.start()
 
+    def start_connection_monitor(self):
+        """Запуск мониторинга соединения с адаптивным интервалом"""
+        
+        def monitor():
+            check_interval = 30  # Начальный интервал
+            consecutive_failures = 0
+            max_interval = 120   # Максимальный интервал
+            min_interval = 10    # Минимальный интервал
+            
+            while self.monitor_running:
+                try:
+                    with self.ftp_lock:
+                        if self.ftp:
+                            start_time = time.time()
+                            self.ftp.voidcmd('NOOP')
+                            response_time = time.time() - start_time
+                            
+                            # Адаптивная настройка интервала на основе времени отклика
+                            if response_time < 0.1:  # Хороший отклик
+                                check_interval = min(check_interval * 1.5, max_interval)
+                            else:  # Медленный отклик
+                                check_interval = max(check_interval * 0.75, min_interval)
+                                
+                            consecutive_failures = 0
+                            self.root.after(0, self.update_status_indicator, True)
+                            
+                except:
+                    consecutive_failures += 1
+                    check_interval = max(check_interval * 0.5, min_interval)
+                    
+                    if consecutive_failures >= 3:
+                        self.root.after(0, self.handle_connection_loss)
+                        break
+                        
+                time.sleep(check_interval)
+
+        Thread(target=monitor, daemon=True).start()
+
     def connect(self):
-        """Подключение к серверу"""
+        """Обновленный метод подключения с поддержкой SSL/TLS"""
         host = self.host_entry.get()
-        port = self.port_entry.get()
+        port = int(self.port_entry.get())
         user = self.user_entry.get()
         password = self.password_entry.get()
-        try:
-            port = int(port)
-            if not (1 <= port <= 65535):
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("Ошибка", "Некорректный номер порта")
-            return
+        use_tls = True  # Можно добавить чекбокс в интерфейс
 
         def connect_task():
-            # Проверка доступности сервера
             try:
+                # Проверка доступности сервера
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(3)
                 result = sock.connect_ex((host, port))
                 sock.close()
                 if result != 0:
-                    raise ConnectionError(f"Сервер {host}:{port} недоступен")
-            except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Ошибка", str(e)))
-                return
+                    error_msg = f"Сервер {host}:{port} недоступен"
+                    self.root.after(0, lambda msg=error_msg: messagebox.showerror("Ошибка", msg))
+                    return
 
-            # Подключение FTP
-            try:
+                # Подключение FTP
                 with self.ftp_lock:
                     if self.ftp:
                         self.ftp.quit()
@@ -270,8 +303,9 @@ class FTPClientApp:
                         self.refresh_remote_list()
                     ])
             except Exception as e:
-                self.root.after(0, lambda: [
-                    messagebox.showerror("Ошибка", f"Ошибка подключения: {e}"),
+                error_msg = str(e)  # Сохраняем сообщение об ошибке в переменную
+                self.root.after(0, lambda msg=error_msg: [  # Передаем сообщение как параметр лямбды
+                    messagebox.showerror("Ошибка", f"Ошибка подключения: {msg}"),
                     self.update_status_indicator(False)
                 ])
 
@@ -804,13 +838,414 @@ class FTPClientApp:
         return None
 
     def create_search_bar(self):
-        """Создание панели поиска"""
-        search_frame = ttk.Frame(self.root)
+        """Создание улучшенной панели поиска"""
+        search_frame = ttk.LabelFrame(self.root, text="Поиск файлов")
         search_frame.pack(fill=tk.X, padx=5, pady=2)
 
+        # Поле ввода для поиска
+        input_frame = ttk.Frame(search_frame)
+        input_frame.pack(fill=tk.X, padx=5, pady=2)
+
         self.search_var = tk.StringVar()
-        self.search_entry = ttk.Entry(search_frame, textvariable=self.search_var)
+        self.search_var.trace('w', self.on_search_change)
+        
+        self.search_entry = ttk.Entry(input_frame, textvariable=self.search_var)
         self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Кнопка очистки поиска
+        ttk.Button(input_frame, text="✕", width=3,
+                  command=self.clear_search).pack(side=tk.LEFT, padx=2)
+
+        # Опции поиска
+        options_frame = ttk.Frame(search_frame)
+        options_frame.pack(fill=tk.X, padx=5, pady=2)
+
+        # Переключатели области поиска
+        self.search_scope = tk.StringVar(value="both")
+        ttk.Radiobutton(options_frame, text="Локальные", 
+                       variable=self.search_scope, 
+                       value="local",
+                       command=self.on_search_change).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(options_frame, text="Удаленные", 
+                       variable=self.search_scope, 
+                       value="remote",
+                       command=self.on_search_change).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(options_frame, text="Везде", 
+                       variable=self.search_scope, 
+                       value="both",
+                       command=self.on_search_change).pack(side=tk.LEFT, padx=5)
+
+        # Дополнительные опции поиска
+        self.case_sensitive = tk.BooleanVar(value=False)
+        ttk.Checkbutton(options_frame, text="Учитывать регистр",
+                       variable=self.case_sensitive,
+                       command=self.on_search_change).pack(side=tk.LEFT, padx=5)
+
+        self.search_in_folders = tk.BooleanVar(value=True)
+        ttk.Checkbutton(options_frame, text="Искать в папках",
+                       variable=self.search_in_folders,
+                       command=self.on_search_change).pack(side=tk.LEFT, padx=5)
+
+    def clear_search(self):
+        """Очистка поиска"""
+        self.search_var.set("")
+        self.refresh_lists()
+
+    def filter_items(self, items, search_text):
+        """Фильтрация элементов по критериям поиска"""
+        filtered = []
+        if not search_text:
+            return items
+
+        for item in items:
+            name = item[0]
+            is_folder = item[2] == "Папка"
+
+            # Проверяем соответствие поисковому запросу
+            if not self.case_sensitive.get():
+                name = name.lower()
+                search_text = search_text.lower()
+
+            # Всегда ищем и в файлах, и в папках
+            if search_text in name:
+                filtered.append(item)
+            # Если это папка и опция поиска в папках включена,
+            # добавляем её даже если она не соответствует поиску
+            elif is_folder and self.search_in_folders.get():
+                filtered.append(item)
+
+        return filtered
+
+    def get_local_files(self):
+        """Получение списка локальных файлов"""
+        items = []
+        try:
+            for item in os.listdir(self.current_local_dir):
+                path = os.path.join(self.current_local_dir, item)
+                try:
+                    stat = os.stat(path)
+                    is_dir = os.path.isdir(path)
+                    # Для файлов показываем размер, для папок - количество элементов внутри
+                    if is_dir:
+                        try:
+                            size = f"{len(os.listdir(path))} элем."
+                        except:
+                            size = "Нет доступа"
+                    else:
+                        size = humanize.naturalsize(stat.st_size)
+                    
+                    modified = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
+                    items.append((item, size, "Папка" if is_dir else "Файл", modified))
+                except Exception as e:
+                    # Если не удалось получить информацию о файле, все равно добавляем его
+                    items.append((item, "Ошибка", "Неизвестно", ""))
+        except Exception as e:
+            self.update_status(f"Ошибка чтения локальной директории: {e}", error=True)
+        return items
+
+    def get_remote_files(self):
+        """Получение списка удаленных файлов"""
+        items = []
+        if not self.ftp:
+            return items
+
+        try:
+            with self.ftp_lock:
+                files = []
+                self.ftp.retrlines('LIST', files.append)
+                for line in files:
+                    try:
+                        parts = line.split()
+                        if len(parts) < 9:
+                            continue
+                        name = ' '.join(parts[8:])
+                        is_dir = parts[0].startswith('d')
+                        
+                        # Для файлов показываем размер, для папок - тип
+                        if is_dir:
+                            size = "Папка"
+                        else:
+                            try:
+                                size = humanize.naturalsize(int(parts[4]))
+                            except:
+                                size = parts[4]
+                                
+                        modified = ' '.join(parts[5:8])
+                        items.append((name, size, "Папка" if is_dir else "Файл", modified))
+                    except Exception as e:
+                        # Если не удалось разобрать строку, пропускаем её
+                        continue
+        except Exception as e:
+            self.update_status(f"Ошибка чтения удаленной директории: {e}", error=True)
+        return items
+
+    def on_search_change(self, *args):
+        """Обработка изменения в поле поиска"""
+        search_text = self.search_var.get()
+        scope = self.search_scope.get()
+
+        # Обновляем локальное дерево
+        if scope in ["local", "both"]:
+            items = self.get_local_files()
+            filtered_items = self.filter_items(items, search_text)
+            self.local_tree.delete(*self.local_tree.get_children())
+            for item in filtered_items:
+                self.local_tree.insert("", tk.END, values=item)
+
+        # Обновляем удаленное дерево
+        if scope in ["remote", "both"] and self.ftp:
+            items = self.get_remote_files()
+            filtered_items = self.filter_items(items, search_text)
+            self.remote_tree.delete(*self.remote_tree.get_children())
+            for item in filtered_items:
+                self.remote_tree.insert("", tk.END, values=item)
+
+        # Обновляем статус
+        total_found = len(self.local_tree.get_children()) + len(self.remote_tree.get_children())
+        if search_text:
+            self.update_status(f"Найдено элементов: {total_found}")
+        else:
+            self.update_status("Готов")
+
+    def setup_sorting(self):
+        """Настройка сортировки по колонкам"""
+        for tree in (self.local_tree, self.remote_tree):
+            for col in ("name", "size", "type", "modified"):
+                tree.heading(col, command=lambda c=col: self.sort_tree_column(tree, c))
+
+    def sort_tree_column(self, tree, col):
+        """Сортировка дерева по колонке"""
+        items = [(tree.set(item, col), item) for item in tree.get_children('')]
+        
+        # Определяем направление сортировки
+        if self.current_sort_column == col:
+            self.sort_reverse = not self.sort_reverse
+        else:
+            self.sort_reverse = False
+        self.current_sort_column = col
+        
+        # Сортируем элементы
+        items.sort(reverse=self.sort_reverse)
+        for index, (_, item) in enumerate(items):
+            tree.move(item, '', index)
+
+    def load_connection_history(self) -> List[Dict]:
+        """Загрузка истории подключений"""
+        try:
+            if os.path.exists(self.connection_history_file):
+                with open(self.connection_history_file, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"Ошибка загрузки истории: {e}")
+        return []
+
+    def save_connection_history(self):
+        """Сохранение истории подключений"""
+        try:
+            with open(self.connection_history_file, 'w') as f:
+                json.dump(self.connection_history, f)
+        except Exception as e:
+            print(f"Ошибка сохранения истории: {e}")
+
+    def add_to_history(self, host: str, port: int, user: str):
+        """Добавление подключения в историю"""
+        connection = {
+            'host': host,
+            'port': port,
+            'user': user,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Удаляем дубликаты
+        self.connection_history = [
+            c for c in self.connection_history 
+            if not (c['host'] == host and c['port'] == port and c['user'] == user)
+        ]
+        
+        # Добавляем новое подключение в начало списка
+        self.connection_history.insert(0, connection)
+        
+        # Ограничиваем размер истории
+        self.connection_history = self.connection_history[:10]
+        self.save_connection_history()
+
+    def show_connection_history(self):
+        """Показ окна истории подключений"""
+        history_window = tk.Toplevel(self.root)
+        history_window.title("История подключений")
+        history_window.geometry("400x300")
+
+        tree = ttk.Treeview(history_window, columns=("host", "port", "user", "date"), show="headings")
+        tree.heading("host", text="Сервер")
+        tree.heading("port", text="Порт")
+        tree.heading("user", text="Пользователь")
+        tree.heading("date", text="Дата")
+
+        for conn in self.connection_history:
+            date = datetime.fromisoformat(conn['timestamp']).strftime("%Y-%m-%d %H:%M")
+            tree.insert("", tk.END, values=(
+                conn['host'],
+                conn['port'],
+                conn['user'],
+                date
+            ))
+
+        tree.bind("<Double-1>", lambda e: self.connect_from_history(tree))
+        tree.pack(fill=tk.BOTH, expand=True)
+
+    def connect_from_history(self, tree):
+        """Подключение из истории"""
+        selected = tree.selection()
+        if not selected:
+            return
+            
+        item = tree.item(selected[0])
+        values = item['values']
+        
+        self.host_entry.delete(0, tk.END)
+        self.host_entry.insert(0, values[0])
+        
+        self.port_entry.delete(0, tk.END)
+        self.port_entry.insert(0, values[1])
+        
+        self.user_entry.delete(0, tk.END)
+        self.user_entry.insert(0, values[2])
+        
+        self.connect()
+
+    def setup_drag_and_drop(self):
+        """Настройка drag-and-drop"""
+        self.local_tree.bind("<ButtonPress-1>", self.on_drag_start)
+        self.local_tree.bind("<B1-Motion>", self.on_drag_motion)
+        self.local_tree.bind("<ButtonRelease-1>", self.on_drag_end)
+        
+        self.remote_tree.bind("<ButtonPress-1>", self.on_drag_start)
+        self.remote_tree.bind("<B1-Motion>", self.on_drag_motion)
+        self.remote_tree.bind("<ButtonRelease-1>", self.on_drag_end)
+
+    def on_drag_start(self, event):
+        """Начало перетаскивания"""
+        tree = event.widget
+        item = tree.identify_row(event.y)
+        if item:
+            tree.selection_set(item)
+            self._drag_data = {'item': item, 'source': tree}
+
+    def on_drag_motion(self, event):
+        """Процесс перетаскивания"""
+        pass  # Можно добавить визуальные эффекты
+
+    def on_drag_end(self, event):
+        """Окончание перетаскивания"""
+        if hasattr(self, '_drag_data'):
+            target = event.widget
+            if target != self._drag_data['source']:
+                # Перетаскивание между деревьями
+                if target == self.remote_tree:
+                    self.upload_files()
+                else:
+                    self.download_files()
+            del self._drag_data
+
+    def load_bookmarks(self) -> List[Dict]:
+        """Загрузка закладок"""
+        try:
+            if os.path.exists(self.bookmarks_file):
+                with open(self.bookmarks_file, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"Ошибка загрузки закладок: {e}")
+        return []
+
+    def save_bookmarks(self):
+        """Сохранение закладок"""
+        try:
+            with open(self.bookmarks_file, 'w') as f:
+                json.dump(self.bookmarks, f)
+        except Exception as e:
+            print(f"Ошибка сохранения закладок: {e}")
+
+    def add_bookmark(self):
+        """Добавление текущего сервера в закладки"""
+        if not self.ftp:
+            messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
+            return
+        
+        name = simpledialog.askstring("Закладка", "Введите название закладки:")
+        if name:
+            bookmark = {
+                'name': name,
+                'host': self.host_entry.get(),
+                'port': int(self.port_entry.get()),
+                'user': self.user_entry.get()
+            }
+            self.bookmarks.append(bookmark)
+            self.save_bookmarks()
+
+    def show_bookmarks(self):
+        """Показ окна закладок"""
+        bookmarks_window = tk.Toplevel(self.root)
+        bookmarks_window.title("Закладки")
+        bookmarks_window.geometry("400x300")
+
+        tree = ttk.Treeview(bookmarks_window, columns=("name", "host", "port", "user"), show="headings")
+        tree.heading("name", text="Название")
+        tree.heading("host", text="Сервер")
+        tree.heading("port", text="Порт")
+        tree.heading("user", text="Пользователь")
+
+        for bookmark in self.bookmarks:
+            tree.insert("", tk.END, values=(
+                bookmark['name'],
+                bookmark['host'],
+                bookmark['port'],
+                bookmark['user']
+            ))
+
+        # Добавляем кнопки управления закладками
+        btn_frame = ttk.Frame(bookmarks_window)
+        btn_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        ttk.Button(btn_frame, text="Подключиться", 
+                   command=lambda: self.connect_from_bookmark(tree)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Удалить", 
+                   command=lambda: self.delete_bookmark(tree)).pack(side=tk.LEFT, padx=2)
+
+        tree.pack(fill=tk.BOTH, expand=True)
+
+    def connect_from_bookmark(self, tree):
+        """Подключение из закладки"""
+        selected = tree.selection()
+        if not selected:
+            return
+            
+        item = tree.item(selected[0])
+        values = item['values']
+        
+        self.host_entry.delete(0, tk.END)
+        self.host_entry.insert(0, values[0])
+        
+        self.port_entry.delete(0, tk.END)
+        self.port_entry.insert(0, values[1])
+        
+        self.user_entry.delete(0, tk.END)
+        self.user_entry.insert(0, values[2])
+        
+        self.connect()
+
+    def delete_bookmark(self, tree):
+        """Удаление закладки"""
+        selected = tree.selection()
+        if not selected:
+            return
+            
+        item = tree.item(selected[0])
+        name = item['values'][0]
+        
+        if messagebox.askyesno("Подтверждение", f"Удалить закладку '{name}'?"):
+            self.bookmarks = [b for b in self.bookmarks if b['name'] != name]
+            self.save_bookmarks()
+            tree.delete(selected)
 
     def load_saved_data(self):
         # Реализация загрузки сохраненных данных
