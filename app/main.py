@@ -87,25 +87,33 @@ class FTPClientApp:
             ("Сервер:", "host_entry", "localhost"),
             ("Порт:", "port_entry", "21"),
             ("Пользователь:", "user_entry", "user"),
-            ("Пароль:", "password_entry", "pass", "*")
         ]
 
-        '''
-        entries = [
-            ("Сервер:", "host_entry", "ftp.gnu.org"),
-            ("Пользователь:", "user_entry", "anonymous"),
-            ("Пароль:", "password_entry", "user@example.com", "*")
-        ]
-        '''
-
-        for i, (label, attr, default, *show) in enumerate(entries):
+        for i, (label, attr, default) in enumerate(entries):
             ttk.Label(frame, text=label).grid(row=i, column=0, padx=5, pady=2, sticky="e")
             entry = ttk.Entry(frame)
             entry.insert(0, default)
-            if show:
-                entry.config(show=show[0])
             entry.grid(row=i, column=1, padx=5, pady=2, sticky="ew")
             setattr(self, attr, entry)
+
+        # Создаем фрейм для пароля и кнопки показа
+        pwd_frame = ttk.Frame(frame)
+        pwd_frame.grid(row=3, column=1, padx=5, pady=2, sticky="ew")
+        
+        ttk.Label(frame, text="Пароль:").grid(row=3, column=0, padx=5, pady=2, sticky="e")
+        
+        # Поле для пароля
+        self.password_entry = ttk.Entry(pwd_frame, show="*")
+        self.password_entry.insert(0, "pass")
+        self.password_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # Переменная для отслеживания состояния показа пароля
+        self.show_password = tk.BooleanVar(value=False)
+        
+        # Кнопка показа/скрытия пароля
+        self.toggle_pwd_btn = ttk.Button(pwd_frame, text="👁", width=3,
+                                       command=self.toggle_password_visibility)
+        self.toggle_pwd_btn.pack(side=tk.LEFT, padx=(2, 0))
 
         self.connect_btn = ttk.Button(frame, text="Подключиться", command=self.connect)
         self.connect_btn.grid(row=4, column=0, columnspan=2, pady=5)
@@ -179,6 +187,7 @@ class FTPClientApp:
             ("🔄 Синхр.", self.sync_folders),
             ("📋 История", self.show_connection_history),
             ("⭐ Закладки", self.show_bookmarks),
+            ("➕ В закладки", self.add_bookmark),
             ("⚙ Настройки", self.show_settings)
         ]
 
@@ -297,6 +306,9 @@ class FTPClientApp:
                     self.monitor_running = True
                     self.start_connection_monitor()
 
+                    # Добавляем подключение в историю
+                    self.add_to_history(host, port, user)
+
                     self.root.after(0, lambda: [
                         self.update_status_indicator(True),
                         self.connect_btn.config(text="Отключиться", command=self.disconnect),
@@ -312,22 +324,33 @@ class FTPClientApp:
         self.task_queue.put(connect_task)
 
     def upload_files(self):
-        """Загрузка файлов"""
+        """Загрузка выбранных локальных файлов на сервер"""
         if not self.ftp:
             messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
             return
 
-        files = filedialog.askopenfilenames(title="Выберите файлы для загрузки")
-        if not files: return
+        selected = self.local_tree.selection()
+        if not selected:
+            messagebox.showwarning("Ошибка", "Выберите файлы для загрузки")
+            return
 
         def upload_task():
-            total = len(files)
+            total = len(selected)
             success = 0
             buffer_size = 8192  # Оптимальный размер буфера
             
-            for i, filepath in enumerate(files):
-                filename = os.path.basename(filepath)
+            for i, item_id in enumerate(selected):
+                values = self.local_tree.item(item_id)['values']
+                filename = values[0]
+                is_folder = values[2] == "Папка"
+                filepath = os.path.join(self.current_local_dir, filename)
+
                 try:
+                    if is_folder:
+                        self.upload_folder(filepath, filename)
+                        success += 1
+                        continue
+
                     self.root.after(0, lambda f=filename: [
                         self.progress_label.config(text=f"Загрузка {i + 1}/{total}: {f}"),
                         self.progress.config(value=(i / total) * 100)
@@ -352,11 +375,40 @@ class FTPClientApp:
                 
             self.root.after(0, lambda: [
                 self.progress.config(value=100),
-                messagebox.showinfo("Готово", f"Успешно загружено {success}/{total} файлов"),
+                messagebox.showinfo("Готово", f"Успешно загружено {success}/{total} файлов/папок"),
                 self.refresh_remote_list()
             ])
 
         self.task_queue.put(upload_task)
+
+    def upload_folder(self, local_path, remote_folder):
+        """Рекурсивная загрузка папки на сервер"""
+        # Создаем удаленную папку
+        try:
+            self.ftp.mkd(remote_folder)
+        except:
+            pass  # Папка может уже существовать
+        
+        # Сохраняем текущую удаленную директорию
+        current_remote = self.ftp.pwd()
+        
+        # Переходим в созданную папку
+        self.ftp.cwd(remote_folder)
+        
+        # Загружаем содержимое папки
+        for item in os.listdir(local_path):
+            local_item_path = os.path.join(local_path, item)
+            
+            if os.path.isfile(local_item_path):
+                # Загружаем файл
+                with open(local_item_path, 'rb') as f:
+                    self.ftp.storbinary(f'STOR {item}', f)
+            elif os.path.isdir(local_item_path):
+                # Рекурсивно загружаем вложенную папку
+                self.upload_folder(local_item_path, item)
+        
+        # Возвращаемся в исходную директорию
+        self.ftp.cwd(current_remote)
 
     def handle_connection_loss(self):
         """Обработка потери соединения"""
@@ -618,49 +670,54 @@ class FTPClientApp:
             messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
             return
 
-        answer = messagebox.askyesno("Синхронизация",
-                                     "Выберите направление синхронизации:\n"
-                                     "Да - Загрузить локальные файлы на сервер\n"
-                                     "Нет - Скачать файлы с сервера",
-                                     detail="В случае конфликта файлы будут перезаписаны!")
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Синхронизация")
+        dialog.geometry("400x170")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Делаем окно модальным и располагаем по центру
+        dialog.geometry("+%d+%d" % (
+            self.root.winfo_rootx() + self.root.winfo_width()//2 - 200,
+            self.root.winfo_rooty() + self.root.winfo_height()//2 - 75
+        ))
 
+        ttk.Label(dialog, text="Выберите направление синхронизации:",
+                 wraplength=380, justify="center").pack(pady=10)
+
+        self.sync_cancelled = False
+        
+        def start_sync(direction):
+            dialog.destroy()
+            self.do_sync(direction)
+            
+        def cancel():
+            self.sync_cancelled = True
+            dialog.destroy()
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        # Кнопка 1 - заполняет по ширине
+        ttk.Button(btn_frame, text="1. Локальные → Удаленные",
+                   command=lambda: start_sync("to_remote")).pack(fill=tk.X, padx=5, pady=2)
+
+        # Кнопка 2 - заполняет по ширине
+        ttk.Button(btn_frame, text="2. Удаленные → Локальные",
+                   command=lambda: start_sync("to_local")).pack(fill=tk.X, padx=5, pady=2)
+
+        # Кнопка Отмена - заполняет по ширине
+        ttk.Button(btn_frame, text="Отмена",
+                   command=cancel).pack(fill=tk.X, padx=5, pady=2)
+
+    def do_sync(self, direction):
+        """Выполнение синхронизации"""
         def sync_task():
             try:
-                if answer:  # Локальная → Удаленная
-                    local_files = set(os.listdir(self.current_local_dir))
-                    remote_files = set(self.ftp.nlst())
-
-                    for file in local_files:
-                        local_path = os.path.join(self.current_local_dir, file)
-                        if os.path.isfile(local_path):
-                            with open(local_path, 'rb') as f:
-                                self.ftp.storbinary(f'STOR {file}', f)
-
-                    self.root.after(0, lambda: [
-                        messagebox.showinfo("Готово", "Локальные файлы загружены на сервер"),
-                        self.refresh_remote_list()
-                    ])
-
+                if direction == "to_remote":  # Локальная → Удаленная
+                    self.sync_to_remote()
                 else:  # Удаленная → Локальная
-                    remote_files = self.ftp.nlst()
-                    local_files = set(os.listdir(self.current_local_dir))
-
-                    for file in remote_files:
-                        remote_path = file
-                        local_path = os.path.join(self.current_local_dir, file)
-
-                        # Проверка, является ли элемент файлом
-                        try:
-                            with open(local_path, 'wb') as f:
-                                self.ftp.retrbinary(f'RETR {file}', f.write)
-                        except error_perm:  # Если это директория - пропускаем
-                            continue
-
-                    self.root.after(0, lambda: [
-                        messagebox.showinfo("Готово", "Файлы с сервера скачаны"),
-                        self.refresh_local_list()
-                    ])
-
+                    self.sync_to_local()
             except Exception as e:
                 self.root.after(0, lambda: [
                     messagebox.showerror("Ошибка", f"Ошибка синхронизации: {str(e)}"),
@@ -668,6 +725,175 @@ class FTPClientApp:
                 ])
 
         self.task_queue.put(sync_task)
+
+    def sync_to_remote(self):
+        """Синхронизация с локальной на удаленную"""
+        local_items = self.get_local_files()
+        total_items = len(local_items)
+        processed = 0
+
+        for item in local_items:
+            if self.sync_cancelled:
+                self.update_status("Синхронизация отменена")
+                return
+
+            name, _, type_, _ = item
+            local_path = os.path.join(self.current_local_dir, name)
+            
+            self.root.after(0, lambda n=name, p=processed, t=total_items: [
+                self.progress_label.config(text=f"Синхронизация {p+1}/{t}: {n}"),
+                self.progress.config(value=(p/t) * 100)
+            ])
+
+            if type_ == "Папка":
+                # Создаем папку на сервере и рекурсивно копируем содержимое
+                try:
+                    self.ftp.mkd(name)
+                except error_perm:
+                    pass  # Папка может уже существовать
+
+                current_remote = self.ftp.pwd()
+                self.ftp.cwd(name)
+                
+                # Рекурсивно обрабатываем содержимое папки
+                for root, dirs, files in os.walk(local_path):
+                    # Создаем относительный путь
+                    rel_path = os.path.relpath(root, local_path)
+                    if rel_path != '.':
+                        try:
+                            self.ftp.mkd(rel_path)
+                        except error_perm:
+                            pass
+                        self.ftp.cwd(rel_path)
+                    
+                    # Загружаем файлы
+                    for file in files:
+                        with open(os.path.join(root, file), 'rb') as f:
+                            self.ftp.storbinary(f'STOR {file}', f)
+                    
+                    # Возвращаемся в родительскую папку
+                    if rel_path != '.':
+                        self.ftp.cwd('/' + current_remote + '/' + name)
+                
+                self.ftp.cwd(current_remote)
+            else:
+                # Загружаем файл
+                with open(local_path, 'rb') as f:
+                    self.ftp.storbinary(f'STOR {name}', f)
+            
+            processed += 1
+
+        if not self.sync_cancelled:
+            self.root.after(0, lambda: [
+                self.progress.config(value=100),
+                messagebox.showinfo("Готово", "Синхронизация завершена"),
+                self.refresh_remote_list()
+            ])
+
+    def sync_to_local(self):
+        """Синхронизация с удаленной на локальную"""
+        remote_items = self.get_remote_files()
+        total_items = len(remote_items)
+        processed = 0
+
+        for item in remote_items:
+            if self.sync_cancelled:
+                self.update_status("Синхронизация отменена")
+                return
+
+            name, _, type_, _ = item
+            local_path = os.path.join(self.current_local_dir, name)
+            
+            self.root.after(0, lambda n=name, p=processed, t=total_items: [
+                self.progress_label.config(text=f"Синхронизация {p+1}/{t}: {n}"),
+                self.progress.config(value=(p/t) * 100)
+            ])
+
+            if type_ == "Папка":
+                # Создаем локальную папку
+                os.makedirs(local_path, exist_ok=True)
+                
+                # Сохраняем текущую удаленную директорию
+                current_remote = self.ftp.pwd()
+                
+                try:
+                    # Переходим в удаленную папку
+                    self.ftp.cwd(name)
+                    
+                    # Получаем список файлов в папке
+                    folder_items = []
+                    self.ftp.retrlines('LIST', folder_items.append)
+                    
+                    # Рекурсивно обрабатываем содержимое
+                    for item_info in folder_items:
+                        parts = item_info.split()
+                        if len(parts) < 9:
+                            continue
+                            
+                        item_name = ' '.join(parts[8:])
+                        is_dir = parts[0].startswith('d')
+                        
+                        if is_dir:
+                            # Рекурсивно создаем подпапки
+                            subdir_path = os.path.join(local_path, item_name)
+                            os.makedirs(subdir_path, exist_ok=True)
+                            
+                            # Рекурсивно синхронизируем подпапку
+                            current_path = self.ftp.pwd()
+                            self.ftp.cwd(item_name)
+                            self.sync_directory_to_local(subdir_path)
+                            self.ftp.cwd(current_path)
+                        else:
+                            # Скачиваем файл
+                            with open(os.path.join(local_path, item_name), 'wb') as f:
+                                self.ftp.retrbinary(f'RETR {item_name}', f.write)
+                    
+                    # Возвращаемся в исходную директорию
+                    self.ftp.cwd(current_remote)
+                    
+                except Exception as e:
+                    self.update_status(f"Ошибка при синхронизации папки {name}: {str(e)}", error=True)
+            else:
+                # Скачиваем файл
+                with open(local_path, 'wb') as f:
+                    self.ftp.retrbinary(f'RETR {name}', f.write)
+            
+            processed += 1
+
+        if not self.sync_cancelled:
+            self.root.after(0, lambda: [
+                self.progress.config(value=100),
+                messagebox.showinfo("Готово", "Синхронизация завершена"),
+                self.refresh_local_list()
+            ])
+
+    def sync_directory_to_local(self, local_path):
+        """Вспомогательный метод для рекурсивной синхронизации папок"""
+        items = []
+        self.ftp.retrlines('LIST', items.append)
+        
+        for item_info in items:
+            parts = item_info.split()
+            if len(parts) < 9:
+                continue
+                
+            name = ' '.join(parts[8:])
+            is_dir = parts[0].startswith('d')
+            
+            if is_dir:
+                # Создаем подпапку
+                subdir_path = os.path.join(local_path, name)
+                os.makedirs(subdir_path, exist_ok=True)
+                
+                # Рекурсивно синхронизируем подпапку
+                current_path = self.ftp.pwd()
+                self.ftp.cwd(name)
+                self.sync_directory_to_local(subdir_path)
+                self.ftp.cwd(current_path)
+            else:
+                # Скачиваем файл
+                with open(os.path.join(local_path, name), 'wb') as f:
+                    self.ftp.retrbinary(f'RETR {name}', f.write)
 
     def show_settings(self):
         """Окно настроек приложения"""
@@ -953,6 +1179,8 @@ class FTPClientApp:
             with self.ftp_lock:
                 files = []
                 self.ftp.retrlines('LIST', files.append)
+                
+                # Сначала собираем базовую информацию
                 for line in files:
                     try:
                         parts = line.split()
@@ -961,14 +1189,23 @@ class FTPClientApp:
                         name = ' '.join(parts[8:])
                         is_dir = parts[0].startswith('d')
                         
-                        # Для файлов показываем размер, для папок - тип
-                        if is_dir:
-                            size = "Папка"
-                        else:
+                        # Для файлов показываем размер
+                        if not is_dir:
                             try:
                                 size = humanize.naturalsize(int(parts[4]))
                             except:
                                 size = parts[4]
+                        else:
+                            # Для папок подсчитываем количество элементов
+                            try:
+                                current_dir = self.ftp.pwd()
+                                self.ftp.cwd(name)
+                                dir_files = []
+                                self.ftp.retrlines('LIST', dir_files.append)
+                                size = f"{len(dir_files)} элем."
+                                self.ftp.cwd(current_dir)
+                            except:
+                                size = "Нет доступа"
                                 
                         modified = ' '.join(parts[5:8])
                         items.append((name, size, "Папка" if is_dir else "Файл", modified))
@@ -1073,13 +1310,19 @@ class FTPClientApp:
         """Показ окна истории подключений"""
         history_window = tk.Toplevel(self.root)
         history_window.title("История подключений")
-        history_window.geometry("400x300")
+        history_window.geometry("800x300")
 
         tree = ttk.Treeview(history_window, columns=("host", "port", "user", "date"), show="headings")
         tree.heading("host", text="Сервер")
         tree.heading("port", text="Порт")
         tree.heading("user", text="Пользователь")
         tree.heading("date", text="Дата")
+
+        # Устанавливаем ширину колонок
+        tree.column("host", width=250)
+        tree.column("port", width=100)
+        tree.column("user", width=200)
+        tree.column("date", width=200)
 
         for conn in self.connection_history:
             date = datetime.fromisoformat(conn['timestamp']).strftime("%Y-%m-%d %H:%M")
@@ -1177,22 +1420,30 @@ class FTPClientApp:
                 'name': name,
                 'host': self.host_entry.get(),
                 'port': int(self.port_entry.get()),
-                'user': self.user_entry.get()
+                'user': self.user_entry.get(),
+                'password': self.password_entry.get()  # Добавляем сохранение пароля
             }
             self.bookmarks.append(bookmark)
             self.save_bookmarks()
+            messagebox.showinfo("Успех", "Закладка добавлена")
 
     def show_bookmarks(self):
         """Показ окна закладок"""
         bookmarks_window = tk.Toplevel(self.root)
         bookmarks_window.title("Закладки")
-        bookmarks_window.geometry("400x300")
+        bookmarks_window.geometry("800x300")
 
         tree = ttk.Treeview(bookmarks_window, columns=("name", "host", "port", "user"), show="headings")
         tree.heading("name", text="Название")
         tree.heading("host", text="Сервер")
         tree.heading("port", text="Порт")
         tree.heading("user", text="Пользователь")
+
+        # Устанавливаем ширину колонок
+        tree.column("name", width=200)
+        tree.column("host", width=250)
+        tree.column("port", width=100)
+        tree.column("user", width=200)
 
         for bookmark in self.bookmarks:
             tree.insert("", tk.END, values=(
@@ -1220,16 +1471,26 @@ class FTPClientApp:
             return
             
         item = tree.item(selected[0])
-        values = item['values']
+        name = item['values'][0]  # Получаем название закладки
         
+        # Ищем закладку по названию
+        bookmark = next((b for b in self.bookmarks if b['name'] == name), None)
+        if not bookmark:
+            messagebox.showerror("Ошибка", "Закладка не найдена")
+            return
+        
+        # Заполняем поля подключения
         self.host_entry.delete(0, tk.END)
-        self.host_entry.insert(0, values[0])
+        self.host_entry.insert(0, bookmark['host'])
         
         self.port_entry.delete(0, tk.END)
-        self.port_entry.insert(0, values[1])
+        self.port_entry.insert(0, str(bookmark['port']))
         
         self.user_entry.delete(0, tk.END)
-        self.user_entry.insert(0, values[2])
+        self.user_entry.insert(0, bookmark['user'])
+        
+        self.password_entry.delete(0, tk.END)
+        self.password_entry.insert(0, bookmark.get('password', ''))  # Используем get для безопасного получения пароля
         
         self.connect()
 
@@ -1250,6 +1511,15 @@ class FTPClientApp:
     def load_saved_data(self):
         # Реализация загрузки сохраненных данных
         pass
+
+    def toggle_password_visibility(self):
+        """Переключение видимости пароля"""
+        if self.show_password.get():
+            self.password_entry.configure(show="*")
+            self.show_password.set(False)
+        else:
+            self.password_entry.configure(show="")
+            self.show_password.set(True)
 
 if __name__ == "__main__":
     root = tk.Tk()
