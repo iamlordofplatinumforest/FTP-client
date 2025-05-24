@@ -11,6 +11,7 @@ import humanize
 import json
 import re
 from typing import Dict, List, Tuple
+import base64
 
 
 class FTPClientApp:
@@ -19,14 +20,33 @@ class FTPClientApp:
         self.root.title("Advanced FTP Client")
         self.root.geometry("1400x750")
 
+        # Ключ для шифрования (в реальном приложении должен храниться безопасно)
+        self._key = 'my_secret_key'
+
+        # Настройки по умолчанию
+        self.settings = {
+            'default_local_dir': os.path.expanduser("~/Downloads"),
+            'buffer_size': 8192,
+            'auto_reconnect': True,
+            'reconnect_attempts': 3,
+            'cache_ttl': 30,
+            'show_hidden_files': False,
+            'confirm_delete': True,
+            'confirm_overwrite': True,
+            'dark_mode': False,
+            'sort_folders_first': True,
+            'date_format': "%Y-%m-%d %H:%M"
+        }
+        
+        self.load_settings()  # Загружаем сохраненные настройки
+
         self.ftp = None
         self.ftp_lock = Lock()
         self.current_remote_dir = "/"
-        self.current_local_dir = os.path.expanduser("~/Downloads")
+        self.current_local_dir = self.settings['default_local_dir']
 
         self.remote_cache = {}
         self.local_cache = {}
-        self.cache_ttl = 30
         self.task_queue = Queue()
         self.running = True
         self.worker_thread = None
@@ -337,7 +357,7 @@ class FTPClientApp:
         def upload_task():
             total = len(selected)
             success = 0
-            buffer_size = 8192  # Оптимальный размер буфера
+            buffer_size = self.settings['buffer_size']  # Оптимальный размер буфера
             
             for i, item_id in enumerate(selected):
                 values = self.local_tree.item(item_id)['values']
@@ -899,159 +919,147 @@ class FTPClientApp:
         """Окно настроек приложения"""
         settings_window = tk.Toplevel(self.root)
         settings_window.title("Настройки")
-        settings_window.geometry("300x200")
+        settings_window.geometry("600x500")
+        settings_window.transient(self.root)
+        settings_window.grab_set()
 
-        # Настройка локальной директории
-        ttk.Label(settings_window, text="Локальная директория:").pack(pady=5)
-        dir_frame = ttk.Frame(settings_window)
-        dir_frame.pack(fill=tk.X, padx=5)
+        # Создаем notebook для вкладок
+        notebook = ttk.Notebook(settings_window)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        self.local_dir_entry = ttk.Entry(dir_frame)
-        self.local_dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.local_dir_entry.insert(0, self.current_local_dir)
+        # Вкладка общих настроек
+        general_frame = ttk.Frame(notebook)
+        notebook.add(general_frame, text="Общие")
 
-        ttk.Button(
-            dir_frame,
-            text="Изменить",
-            command=self.change_local_directory
-        ).pack(side=tk.RIGHT)
+        # Локальная директория по умолчанию
+        dir_frame = ttk.LabelFrame(general_frame, text="Директории")
+        dir_frame.pack(fill=tk.X, padx=5, pady=5)
 
-    def change_local_directory(self):
-        """Изменение локальной директории"""
-        new_dir = filedialog.askdirectory(initialdir=self.current_local_dir)
-        if new_dir:
-            self.current_local_dir = new_dir
-            self.local_path_var.set(f"Локальная: {self.current_local_dir}")
-            self.refresh_local_list()
+        ttk.Label(dir_frame, text="Локальная директория:").pack(anchor="w", padx=5, pady=2)
+        local_dir_frame = ttk.Frame(dir_frame)
+        local_dir_frame.pack(fill=tk.X, padx=5, pady=2)
+        
+        local_dir_entry = ttk.Entry(local_dir_frame)
+        local_dir_entry.insert(0, self.settings['default_local_dir'])
+        local_dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        ttk.Button(local_dir_frame, text="Обзор", 
+                  command=lambda: self.choose_directory(local_dir_entry)).pack(side=tk.LEFT, padx=2)
 
-    def create_local_dir(self):
-        """Создание локальной папки"""
-        dirname = simpledialog.askstring("Создать папку", "Введите имя папки:")
-        if dirname:
-            try:
-                new_dir = os.path.join(self.current_local_dir, dirname)
-                os.makedirs(new_dir, exist_ok=True)
-                self.refresh_local_list()
-            except Exception as e:
-                messagebox.showerror("Ошибка", f"Не удалось создать папку: {str(e)}")
+        # Настройки подключения
+        connection_frame = ttk.LabelFrame(general_frame, text="Подключение")
+        connection_frame.pack(fill=tk.X, padx=5, pady=5)
 
-    def open_local_file(self):
-        """Открытие локального файла"""
-        selected = self.local_tree.selection()
-        if selected:
-            filename = self.local_tree.item(selected[0], 'values')[0]
-            full_path = os.path.join(self.current_local_dir, filename)
-            if os.path.isfile(full_path):
-                try:
-                    os.startfile(full_path)
-                except Exception as e:
-                    messagebox.showerror("Ошибка", f"Не удалось открыть файл: {str(e)}")
+        auto_reconnect_var = tk.BooleanVar(value=self.settings['auto_reconnect'])
+        ttk.Checkbutton(connection_frame, text="Автоматическое переподключение",
+                       variable=auto_reconnect_var).pack(anchor="w", padx=5, pady=2)
 
-    def rename_local(self):
-        """Переименование локального файла"""
-        selected = self.local_tree.selection()
-        if selected:
-            old_name = self.local_tree.item(selected[0], 'values')[0]
-            new_name = simpledialog.askstring(
-                "Переименование",
-                "Введите новое имя:",
-                initialvalue=old_name
-            )
-            if new_name and new_name != old_name:
-                try:
-                    src = os.path.join(self.current_local_dir, old_name)
-                    dst = os.path.join(self.current_local_dir, new_name)
-                    os.rename(src, dst)
-                    self.refresh_local_list()
-                except Exception as e:
-                    messagebox.showerror("Ошибка", f"Ошибка переименования: {str(e)}")
+        reconnect_frame = ttk.Frame(connection_frame)
+        reconnect_frame.pack(fill=tk.X, padx=5, pady=2)
+        ttk.Label(reconnect_frame, text="Количество попыток:").pack(side=tk.LEFT)
+        reconnect_attempts = ttk.Spinbox(reconnect_frame, from_=1, to=10, width=5)
+        reconnect_attempts.set(self.settings['reconnect_attempts'])
+        reconnect_attempts.pack(side=tk.LEFT, padx=5)
 
-    def delete_local(self):
-        """Удаление локального файла"""
-        selected = self.local_tree.selection()
-        if selected:
-            filename = self.local_tree.item(selected[0], 'values')[0]
-            path = os.path.join(self.current_local_dir, filename)
+        # Настройки интерфейса
+        interface_frame = ttk.LabelFrame(general_frame, text="Интерфейс")
+        interface_frame.pack(fill=tk.X, padx=5, pady=5)
 
-            if messagebox.askyesno("Подтверждение", f"Удалить {filename}?"):
-                try:
-                    if os.path.isdir(path):
-                        os.rmdir(path)
-                    else:
-                        os.remove(path)
-                    self.refresh_local_list()
-                except Exception as e:
-                    messagebox.showerror("Ошибка", f"Не удалось удалить: {str(e)}")
+        dark_mode_var = tk.BooleanVar(value=self.settings['dark_mode'])
+        ttk.Checkbutton(interface_frame, text="Тёмная тема",
+                       variable=dark_mode_var).pack(anchor="w", padx=5, pady=2)
 
-    def rename_remote(self):
-        """Переименование файла/папки на сервере"""
-        if not self.ftp:
-            messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
-            return
+        sort_folders_var = tk.BooleanVar(value=self.settings['sort_folders_first'])
+        ttk.Checkbutton(interface_frame, text="Показывать папки первыми",
+                       variable=sort_folders_var).pack(anchor="w", padx=5, pady=2)
 
-        selected = self.remote_tree.selection()
-        if not selected:
-            messagebox.showwarning("Ошибка", "Выберите файл для переименования")
-            return
+        show_hidden_var = tk.BooleanVar(value=self.settings['show_hidden_files'])
+        ttk.Checkbutton(interface_frame, text="Показывать скрытые файлы",
+                       variable=show_hidden_var).pack(anchor="w", padx=5, pady=2)
 
-        old_name = self.remote_tree.item(selected[0], 'values')[0]
-        new_name = simpledialog.askstring(
-            "Переименование",
-            "Введите новое имя:",
-            initialvalue=old_name
-        )
+        # Вкладка подтверждений
+        confirm_frame = ttk.Frame(notebook)
+        notebook.add(confirm_frame, text="Подтверждения")
 
-        if new_name and new_name != old_name:
-            try:
-                # Используем FTP команды RNFR и RNTO
-                self.ftp.rename(old_name, new_name)
-                self.refresh_remote_list()
-                messagebox.showinfo("Успех", "Файл успешно переименован")
-            except error_perm as e:
-                messagebox.showerror("Ошибка",
-                                     f"Нет прав на переименование: {str(e)}")
-            except Exception as e:
-                messagebox.showerror("Ошибка",
-                                     f"Ошибка переименования: {str(e)}")
+        confirm_delete_var = tk.BooleanVar(value=self.settings['confirm_delete'])
+        ttk.Checkbutton(confirm_frame, text="Подтверждать удаление",
+                       variable=confirm_delete_var).pack(anchor="w", padx=5, pady=2)
 
-    def delete_remote(self):
-        """Удаление файла/папки на сервере"""
-        if not self.ftp:
-            messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
-            return
+        confirm_overwrite_var = tk.BooleanVar(value=self.settings['confirm_overwrite'])
+        ttk.Checkbutton(confirm_frame, text="Подтверждать перезапись",
+                       variable=confirm_overwrite_var).pack(anchor="w", padx=5, pady=2)
 
-        selected = self.remote_tree.selection()
-        if not selected:
-            messagebox.showwarning("Ошибка", "Выберите файл для удаления")
-            return
+        # Вкладка производительности
+        performance_frame = ttk.Frame(notebook)
+        notebook.add(performance_frame, text="Производительность")
 
-        filename = self.remote_tree.item(selected[0], 'values')[0]
+        ttk.Label(performance_frame, text="Размер буфера (байт):").pack(anchor="w", padx=5, pady=2)
+        buffer_size = ttk.Entry(performance_frame)
+        buffer_size.insert(0, str(self.settings['buffer_size']))
+        buffer_size.pack(anchor="w", padx=5, pady=2)
 
-        if not messagebox.askyesno("Подтверждение", f"Удалить {filename}?"):
-            return
+        ttk.Label(performance_frame, text="Время жизни кэша (сек):").pack(anchor="w", padx=5, pady=2)
+        cache_ttl = ttk.Entry(performance_frame)
+        cache_ttl.insert(0, str(self.settings['cache_ttl']))
+        cache_ttl.pack(anchor="w", padx=5, pady=2)
 
+        # Кнопки
+        btn_frame = ttk.Frame(settings_window)
+        btn_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        ttk.Button(btn_frame, text="Сохранить", command=lambda: self.save_settings({
+            'default_local_dir': local_dir_entry.get(),
+            'buffer_size': int(buffer_size.get()),
+            'auto_reconnect': auto_reconnect_var.get(),
+            'reconnect_attempts': int(reconnect_attempts.get()),
+            'cache_ttl': int(cache_ttl.get()),
+            'show_hidden_files': show_hidden_var.get(),
+            'confirm_delete': confirm_delete_var.get(),
+            'confirm_overwrite': confirm_overwrite_var.get(),
+            'dark_mode': dark_mode_var.get(),
+            'sort_folders_first': sort_folders_var.get(),
+            'date_format': self.settings['date_format']
+        }, settings_window)).pack(side=tk.RIGHT, padx=5)
+
+        ttk.Button(btn_frame, text="Отмена",
+                  command=settings_window.destroy).pack(side=tk.RIGHT, padx=5)
+
+    def choose_directory(self, entry):
+        """Выбор директории через диалог"""
+        directory = filedialog.askdirectory(initialdir=entry.get())
+        if directory:
+            entry.delete(0, tk.END)
+            entry.insert(0, directory)
+
+    def save_settings(self, new_settings, window):
+        """Сохранение настроек"""
         try:
-            # Проверяем, это файл или директория
-            is_dir = False
-            try:
-                self.ftp.cwd(filename)
-                is_dir = True
-                self.ftp.cwd('..')
-            except:
-                pass
-
-            if is_dir:
-                self.ftp.rmd(filename)
-            else:
-                self.ftp.delete(filename)
-
-            self.refresh_remote_list()
-            messagebox.showinfo("Успех", "Файл успешно удален")
-
-        except error_perm as e:
-            messagebox.showerror("Ошибка", f"Нет прав на удаление: {str(e)}")
+            self.settings.update(new_settings)
+            with open(os.path.join(os.path.expanduser("~"), ".ftp_client_settings.json"), 'w') as f:
+                json.dump(self.settings, f)
+            
+            # Применяем некоторые настройки сразу
+            self.current_local_dir = self.settings['default_local_dir']
+            self.cache_ttl = self.settings['cache_ttl']
+            
+            # Обновляем интерфейс
+            self.refresh_lists()
+            
+            messagebox.showinfo("Успех", "Настройки сохранены")
+            window.destroy()
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка удаления: {str(e)}")
+            messagebox.showerror("Ошибка", f"Не удалось сохранить настройки: {str(e)}")
+
+    def load_settings(self):
+        """Загрузка настроек"""
+        try:
+            settings_file = os.path.join(os.path.expanduser("~"), ".ftp_client_settings.json")
+            if os.path.exists(settings_file):
+                with open(settings_file, 'r') as f:
+                    saved_settings = json.load(f)
+                    self.settings.update(saved_settings)
+        except Exception as e:
+            print(f"Ошибка загрузки настроек: {e}")
 
     def get_cached_remote_list(self):
         current_path = self.ftp.pwd()
@@ -1408,6 +1416,30 @@ class FTPClientApp:
         except Exception as e:
             print(f"Ошибка сохранения закладок: {e}")
 
+    def _encrypt_password(self, password):
+        """Простое шифрование пароля"""
+        if not password:
+            return ""
+        try:
+            # Простое XOR шифрование
+            encrypted = ''.join(chr(ord(c) ^ ord(k)) for c, k in zip(password, self._key * (len(password) // len(self._key) + 1)))
+            # Конвертируем в base64 для безопасного хранения
+            return base64.b64encode(encrypted.encode()).decode()
+        except:
+            return ""
+
+    def _decrypt_password(self, encrypted_password):
+        """Расшифровка пароля"""
+        if not encrypted_password:
+            return ""
+        try:
+            # Декодируем из base64
+            decoded = base64.b64decode(encrypted_password.encode()).decode()
+            # Применяем XOR для расшифровки
+            return ''.join(chr(ord(c) ^ ord(k)) for c, k in zip(decoded, self._key * (len(decoded) // len(self._key) + 1)))
+        except:
+            return ""
+
     def add_bookmark(self):
         """Добавление текущего сервера в закладки"""
         if not self.ftp:
@@ -1416,12 +1448,15 @@ class FTPClientApp:
         
         name = simpledialog.askstring("Закладка", "Введите название закладки:")
         if name:
+            # Шифруем пароль перед сохранением
+            encrypted_password = self._encrypt_password(self.password_entry.get())
+            
             bookmark = {
                 'name': name,
                 'host': self.host_entry.get(),
                 'port': int(self.port_entry.get()),
                 'user': self.user_entry.get(),
-                'password': self.password_entry.get()  # Добавляем сохранение пароля
+                'password': encrypted_password
             }
             self.bookmarks.append(bookmark)
             self.save_bookmarks()
@@ -1489,8 +1524,10 @@ class FTPClientApp:
         self.user_entry.delete(0, tk.END)
         self.user_entry.insert(0, bookmark['user'])
         
+        # Расшифровываем и устанавливаем пароль
+        decrypted_password = self._decrypt_password(bookmark.get('password', ''))
         self.password_entry.delete(0, tk.END)
-        self.password_entry.insert(0, bookmark.get('password', ''))  # Используем get для безопасного получения пароля
+        self.password_entry.insert(0, decrypted_password)
         
         self.connect()
 
