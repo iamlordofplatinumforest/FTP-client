@@ -4,6 +4,7 @@ from ftplib import FTP, FTP_TLS, error_perm
 import os
 import socket
 from threading import Thread, Lock
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue
 from datetime import datetime
 import time
@@ -23,6 +24,10 @@ class FTPClientApp:
         # Ключ для шифрования (в реальном приложении должен храниться безопасно)
         self._key = 'my_secret_key'
 
+        # Добавляем очередь обновлений и флаг обновления
+        self.update_queue = Queue()
+        self.is_updating = False
+        
         # Настройки по умолчанию
         self.settings = {
             'default_local_dir': os.path.expanduser("~/Downloads"),
@@ -69,6 +74,29 @@ class FTPClientApp:
         self.create_connection_indicator()
         self.create_search_bar()
         self.load_saved_data()
+
+        # Запускаем обработчик обновлений
+        self.start_update_handler()
+
+    def start_update_handler(self):
+        """Запуск обработчика обновлений интерфейса"""
+        def update_handler():
+            if not self.is_updating and not self.update_queue.empty():
+                self.is_updating = True
+                try:
+                    while not self.update_queue.empty():
+                        update_func = self.update_queue.get_nowait()
+                        if update_func:
+                            update_func()
+                finally:
+                    self.is_updating = False
+            self.root.after(100, update_handler)
+        
+        self.root.after(100, update_handler)
+
+    def schedule_update(self, update_func):
+        """Планирование обновления интерфейса"""
+        self.update_queue.put(update_func)
 
     def create_connection_indicator(self):
         self.status_canvas = tk.Canvas(self.root, width=20, height=20, highlightthickness=0)
@@ -344,7 +372,7 @@ class FTPClientApp:
         self.task_queue.put(connect_task)
 
     def upload_files(self):
-        """Загрузка выбранных локальных файлов на сервер"""
+        """Загрузка выбранных локальных файлов на сервер с использованием пула потоков"""
         if not self.ftp:
             messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
             return
@@ -354,48 +382,64 @@ class FTPClientApp:
             messagebox.showwarning("Ошибка", "Выберите файлы для загрузки")
             return
 
+        def upload_file(item_data):
+            item_id, total, index = item_data
+            values = self.local_tree.item(item_id)['values']
+            filename = values[0]
+            is_folder = values[2] == "Папка"
+            filepath = os.path.join(self.current_local_dir, filename)
+
+            try:
+                if is_folder:
+                    with self.ftp_lock:
+                        self.upload_folder(filepath, filename)
+                    self.schedule_update(self.refresh_remote_list)
+                    return True, filename
+                
+                file_size = os.path.getsize(filepath)
+                buffer_size = self._get_optimal_buffer_size(file_size)
+
+                with self.ftp_lock, open(filepath, 'rb') as f:
+                    def callback(data):
+                        f.seek(len(data), 1)
+                        progress = ((index + (f.tell() / file_size)) / total) * 100
+                        self.schedule_update(lambda: self.progress.config(value=progress))
+                    
+                    self.ftp.storbinary(f"STOR {filename}", f, buffer_size, callback)
+                    self.schedule_update(self.refresh_remote_list)
+                return True, filename
+                
+            except Exception as e:
+                return False, (filename, str(e))
+
         def upload_task():
             total = len(selected)
-            success = 0
-            buffer_size = self.settings['buffer_size']  # Оптимальный размер буфера
-            
-            for i, item_id in enumerate(selected):
-                values = self.local_tree.item(item_id)['values']
-                filename = values[0]
-                is_folder = values[2] == "Папка"
-                filepath = os.path.join(self.current_local_dir, filename)
-
-                try:
-                    if is_folder:
-                        self.upload_folder(filepath, filename)
-                        success += 1
-                        continue
-
-                    self.root.after(0, lambda f=filename: [
-                        self.progress_label.config(text=f"Загрузка {i + 1}/{total}: {f}"),
-                        self.progress.config(value=(i / total) * 100)
-                    ])
-                    
-                    # Буферизированное чтение файла
-                    with open(filepath, 'rb') as f:
-                        def callback(data):
-                            f.seek(len(data), 1)
-                            self.progress.config(
-                                value=((i + (f.tell() / os.path.getsize(filepath))) / total) * 100
-                            )
-                        
-                        self.ftp.storbinary(f"STOR {filename}", f, buffer_size, callback)
-                    success += 1
-                    
-                except Exception as e:
-                    self.root.after(0, lambda f=filename, eх=e: [
-                        messagebox.showerror("Ошибка", f"Ошибка загрузки {f}: {eх}"),
-                        self.update_status(f"Ошибка: {f}", error=True)
-                    ])
+            with ThreadPoolExecutor(max_workers=min(total, 5)) as executor:
+                futures = []
+                for i, item_id in enumerate(selected):
+                    futures.append(executor.submit(upload_file, (item_id, total, i)))
                 
-            self.root.after(0, lambda: [
+                success = 0
+                errors = []
+                
+                for future in as_completed(futures):
+                    result, data = future.result()
+                    if result:
+                        success += 1
+                        self.schedule_update(lambda f=data: 
+                            self.progress_label.config(text=f"Загружен файл: {f}"))
+                    else:
+                        filename, error = data
+                        errors.append(f"{filename}: {error}")
+                        self.schedule_update(lambda f=filename, e=error: [
+                            self.update_status(f"Ошибка загрузки {f}: {e}", error=True)
+                        ])
+                
+            self.schedule_update(lambda: [
                 self.progress.config(value=100),
-                messagebox.showinfo("Готово", f"Успешно загружено {success}/{total} файлов/папок"),
+                messagebox.showinfo("Готово", 
+                    f"Успешно загружено {success}/{total} файлов" + 
+                    (f"\nОшибки:\n" + "\n".join(errors) if errors else "")),
                 self.refresh_remote_list()
             ])
 
@@ -494,19 +538,17 @@ class FTPClientApp:
 
     def refresh_remote_list(self):
         """Обновление удаленных файлов с использованием кэша"""
-        
         def refresh_task():
-            cached_list = self.get_cached_remote_list()
-            if cached_list:
-                self.root.after(0, lambda: (
-                    self.remote_tree.delete(*self.remote_tree.get_children()),
-                    [self.remote_tree.insert("", tk.END, values=item) for item in cached_list],
-                    self.remote_path_var.set(f"Удалённая: {self.ftp.pwd()}")
-                ))
-                return
+            try:
+                with self.ftp_lock:
+                    if not self.ftp:
+                        return
 
-            with self.ftp_lock:
-                try:
+                    cached_list = self.get_cached_remote_list()
+                    if cached_list:
+                        self.schedule_update(lambda: self.update_remote_tree(cached_list))
+                        return
+
                     files = []
                     self.ftp.retrlines('LIST', files.append)
                     parsed = []
@@ -523,21 +565,27 @@ class FTPClientApp:
                     # Сохраняем в кэш
                     self.remote_cache[self.ftp.pwd()] = (time.time(), parsed)
                     
-                    self.root.after(0, lambda: (
-                        self.remote_tree.delete(*self.remote_tree.get_children()),
-                        [self.remote_tree.insert("", tk.END, values=item) for item in parsed],
-                        self.remote_path_var.set(f"Удалённая: {self.ftp.pwd()}")
-                    ))
-                except Exception as e:
-                    self.root.after(0, lambda: [
-                        messagebox.showerror("Ошибка", f"Ошибка обновления: {e}"),
-                        self.update_status(f"Ошибка: {e}", error=True)
-                    ])
+                    # Планируем обновление интерфейса
+                    self.schedule_update(lambda: self.update_remote_tree(parsed))
+
+            except Exception as e:
+                error_msg = str(e)
+                self.schedule_update(lambda: [
+                    messagebox.showerror("Ошибка", f"Ошибка обновления: {error_msg}"),
+                    self.update_status(f"Ошибка: {error_msg}", error=True)
+                ])
 
         self.task_queue.put(refresh_task)
 
+    def update_remote_tree(self, items):
+        """Обновление удаленного дерева файлов"""
+        self.remote_tree.delete(*self.remote_tree.get_children())
+        for item in items:
+            self.remote_tree.insert("", tk.END, values=item)
+        self.remote_path_var.set(f"Удалённая: {self.ftp.pwd()}")
+
     def download_files(self):
-        """Скачивание файлов"""
+        """Скачивание файлов с использованием пула потоков"""
         if not self.ftp:
             messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
             return
@@ -550,30 +598,77 @@ class FTPClientApp:
         dest_dir = filedialog.askdirectory(title="Выберите папку для сохранения")
         if not dest_dir: return
 
+        def download_file(item_data):
+            item_id, total, index = item_data
+            filename = self.remote_tree.item(item_id, 'values')[0]
+            dest = os.path.join(dest_dir, filename)
+            
+            try:
+                # Получаем размер файла для оптимизации буфера
+                with self.ftp_lock:
+                    try:
+                        file_size = self.ftp.size(filename)
+                    except:
+                        file_size = 1024 * 1024  # Если не удалось получить размер, предполагаем 1MB
+
+                # Определяем оптимальный размер буфера
+                if file_size < 1024 * 1024:  # < 1MB
+                    buffer_size = 8192
+                elif file_size < 10 * 1024 * 1024:  # < 10MB
+                    buffer_size = 32768
+                else:  # >= 10MB
+                    buffer_size = 65536
+
+                with self.ftp_lock, open(dest, 'wb') as f:
+                    bytes_received = 0
+                    
+                    def callback(data):
+                        nonlocal bytes_received
+                        f.write(data)
+                        bytes_received += len(data)
+                        progress = ((index + (bytes_received / file_size)) / total) * 100
+                        self.schedule_update(lambda: self.progress.config(value=progress))
+
+                    self.ftp.retrbinary(f"RETR {filename}", callback, buffer_size)
+                return True, filename
+            except Exception as e:
+                if os.path.exists(dest):
+                    try:
+                        os.remove(dest)  # Удаляем частично скачанный файл
+                    except:
+                        pass
+                return False, (filename, str(e))
+
         def download_task():
             total = len(selected)
-            success = 0
-            for i, item_id in enumerate(selected):
-                filename = self.remote_tree.item(item_id, 'values')[0]
-                dest = os.path.join(dest_dir, filename)
-                try:
-                    self.root.after(0, lambda f=filename: [
-                        self.progress_label.config(text=f"Скачивание {i + 1}/{total}: {f}"),
-                        self.progress.config(value=(i / total) * 100)
-                    ])
-                    with open(dest, 'wb') as f:
-                        self.ftp.retrbinary(f"RETR {filename}", f.write)
-                    success += 1
-                except Exception as e:
-                    self.root.after(0, lambda f=filename, eх=e: [
-                        messagebox.showerror("Ошибка", f"Ошибка скачивания {f}: {eх}"),
-                        self.update_status(f"Ошибка: {f}", error=True)
-                    ])
-            self.root.after(0, lambda: [
-                self.progress.config(value=100),
-                messagebox.showinfo("Готово", f"Успешно скачано {success}/{total} файлов"),
-                self.refresh_local_list()
-            ])
+            with ThreadPoolExecutor(max_workers=min(total, 5)) as executor:
+                futures = []
+                for i, item_id in enumerate(selected):
+                    futures.append(executor.submit(download_file, (item_id, total, i)))
+                
+                success = 0
+                errors = []
+                
+                for future in as_completed(futures):
+                    result, data = future.result()
+                    if result:
+                        success += 1
+                        self.schedule_update(lambda f=data: 
+                            self.progress_label.config(text=f"Скачан файл: {f}"))
+                    else:
+                        filename, error = data
+                        errors.append(f"{filename}: {error}")
+                        self.schedule_update(lambda f=filename, e=error: [
+                            self.update_status(f"Ошибка скачивания {f}: {e}", error=True)
+                        ])
+                
+                self.schedule_update(lambda: [
+                    self.progress.config(value=100),
+                    messagebox.showinfo("Готово", 
+                        f"Успешно скачано {success}/{total} файлов" + 
+                        (f"\nОшибки:\n" + "\n".join(errors) if errors else "")),
+                    self.refresh_local_list()
+                ])
 
         self.task_queue.put(download_task)
 
@@ -607,12 +702,15 @@ class FTPClientApp:
                     else:
                         self.ftp.delete(filename)
                     success += 1
+                    self.schedule_update(self.refresh_remote_list)
                 except Exception as e:
-                    self.root.after(0, lambda f=filename, eх=e: [
-                        messagebox.showerror("Ошибка", f"Ошибка удаления {f}: {eх}"),
-                        self.update_status(f"Ошибка: {f}", error=True)
+                    error_msg = str(e)
+                    self.schedule_update(lambda f=filename, msg=error_msg: [
+                        messagebox.showerror("Ошибка", f"Ошибка удаления {f}: {msg}"),
+                        self.update_status(f"Ошибка: {msg}", error=True)
                     ])
-            self.root.after(0, lambda: [
+            
+            self.schedule_update(lambda: [
                 self.progress.config(value=100),
                 messagebox.showinfo("Готово", f"Удалено {success}/{total} файлов"),
                 self.refresh_remote_list()
@@ -634,9 +732,10 @@ class FTPClientApp:
                     messagebox.showinfo("Успех", f"Папка '{dirname}' создана")
                 ])
             except Exception as e:
-                self.root.after(0, lambda: [
-                    messagebox.showerror("Ошибка", f"Ошибка создания: {e}"),
-                    self.update_status(f"Ошибка: {e}", error=True)
+                error_msg = str(e)  # Сохраняем сообщение об ошибке в переменную
+                self.root.after(0, lambda msg=error_msg: [  # Передаем сообщение как параметр лямбды
+                    messagebox.showerror("Ошибка", f"Ошибка создания: {msg}"),
+                    self.update_status(f"Ошибка: {msg}", error=True)
                 ])
 
         self.task_queue.put(create_task)
@@ -755,173 +854,260 @@ class FTPClientApp:
         self.task_queue.put(sync_task)
 
     def sync_to_remote(self):
-        """Синхронизация с локальной на удаленную"""
+        """Синхронизация с локальной на удаленную с использованием пула потоков"""
         local_items = self.get_local_files()
         total_items = len(local_items)
         processed = 0
+        errors = []
 
-        for item in local_items:
-            if self.sync_cancelled:
-                self.update_status("Синхронизация отменена")
-                return
-
+        def sync_item(item_data):
+            item, index = item_data
             name, _, type_, _ = item
             local_path = os.path.join(self.current_local_dir, name)
             
-            self.root.after(0, lambda n=name, p=processed, t=total_items: [
-                self.progress_label.config(text=f"Синхронизация {p+1}/{t}: {n}"),
-                self.progress.config(value=(p/t) * 100)
-            ])
-
-            if type_ == "Папка":
-                # Создаем папку на сервере и рекурсивно копируем содержимое
-                try:
-                    self.ftp.mkd(name)
-                except error_perm:
-                    pass  # Папка может уже существовать
-
-                current_remote = self.ftp.pwd()
-                self.ftp.cwd(name)
-                
-                # Рекурсивно обрабатываем содержимое папки
-                for root, dirs, files in os.walk(local_path):
-                    # Создаем относительный путь
-                    rel_path = os.path.relpath(root, local_path)
-                    if rel_path != '.':
+            try:
+                if type_ == "Папка":
+                    with self.ftp_lock:
                         try:
-                            self.ftp.mkd(rel_path)
+                            self.ftp.mkd(name)
                         except error_perm:
-                            pass
-                        self.ftp.cwd(rel_path)
+                            pass  # Папка может уже существовать
+
+                        current_remote = self.ftp.pwd()
+                        self.ftp.cwd(name)
+                        
+                        # Собираем все файлы в папке для параллельной обработки
+                        folder_items = []
+                        for root, dirs, files in os.walk(local_path):
+                            rel_path = os.path.relpath(root, local_path)
+                            for file in files:
+                                folder_items.append((rel_path, file))
+                        
+                        # Параллельно загружаем файлы
+                        with ThreadPoolExecutor(max_workers=5) as inner_executor:
+                            futures = []
+                            for rel_path, file in folder_items:
+                                futures.append(inner_executor.submit(
+                                    self._upload_file_in_folder,
+                                    current_remote, name, rel_path, file,
+                                    os.path.join(root, file)
+                                ))
+                            
+                            # Собираем ошибки
+                            for future in as_completed(futures):
+                                error = future.result()
+                                if error:
+                                    errors.append(error)
+                        
+                        self.ftp.cwd(current_remote)
+                else:
+                    # Загружаем файл
+                    file_size = os.path.getsize(local_path)
+                    buffer_size = self._get_optimal_buffer_size(file_size)
                     
-                    # Загружаем файлы
-                    for file in files:
-                        with open(os.path.join(root, file), 'rb') as f:
-                            self.ftp.storbinary(f'STOR {file}', f)
-                    
-                    # Возвращаемся в родительскую папку
-                    if rel_path != '.':
-                        self.ftp.cwd('/' + current_remote + '/' + name)
+                    with self.ftp_lock, open(local_path, 'rb') as f:
+                        self.ftp.storbinary(f'STOR {name}', f, buffer_size)
                 
-                self.ftp.cwd(current_remote)
-            else:
-                # Загружаем файл
-                with open(local_path, 'rb') as f:
-                    self.ftp.storbinary(f'STOR {name}', f)
+                return True, name
+            except Exception as e:
+                return False, f"{name}: {str(e)}"
+
+        def _upload_file_in_folder(self, base_remote, base_folder, rel_path, filename, filepath):
+            try:
+                with self.ftp_lock:
+                    # Переходим в нужную директорию
+                    self.ftp.cwd(f"{base_remote}/{base_folder}")
+                    if rel_path != '.':
+                        for part in rel_path.split(os.sep):
+                            try:
+                                self.ftp.mkd(part)
+                            except error_perm:
+                                pass
+                            self.ftp.cwd(part)
+                    
+                    # Загружаем файл
+                    file_size = os.path.getsize(filepath)
+                    buffer_size = self._get_optimal_buffer_size(file_size)
+                    with open(filepath, 'rb') as f:
+                        self.ftp.storbinary(f'STOR {filename}', f, buffer_size)
+                    return None
+            except Exception as e:
+                return f"{os.path.join(rel_path, filename)}: {str(e)}"
+            finally:
+                # Возвращаемся в исходную директорию
+                with self.ftp_lock:
+                    self.ftp.cwd(base_remote)
+
+        def _get_optimal_buffer_size(self, file_size):
+            if file_size < 1024 * 1024:  # < 1MB
+                return 8192
+            elif file_size < 10 * 1024 * 1024:  # < 10MB
+                return 32768
+            else:  # >= 10MB
+                return 65536
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = []
+            for i, item in enumerate(local_items):
+                if self.sync_cancelled:
+                    self.update_status("Синхронизация отменена")
+                    return
+                futures.append(executor.submit(sync_item, (item, i)))
             
-            processed += 1
+            for future in as_completed(futures):
+                if self.sync_cancelled:
+                    self.update_status("Синхронизация отменена")
+                    return
+                
+                result, data = future.result()
+                processed += 1
+                
+                if result:
+                    self.root.after(0, lambda n=data, p=processed, t=total_items: [
+                        self.progress_label.config(text=f"Синхронизация {p}/{t}: {n}"),
+                        self.progress.config(value=(p/t) * 100)
+                    ])
+                else:
+                    errors.append(data)
 
         if not self.sync_cancelled:
             self.root.after(0, lambda: [
                 self.progress.config(value=100),
-                messagebox.showinfo("Готово", "Синхронизация завершена"),
+                messagebox.showinfo("Готово", 
+                    f"Синхронизация завершена\nОбработано: {processed}/{total_items}" +
+                    (f"\nОшибки:\n" + "\n".join(errors) if errors else "")),
                 self.refresh_remote_list()
             ])
 
     def sync_to_local(self):
-        """Синхронизация с удаленной на локальную"""
+        """Синхронизация с удаленной на локальную с использованием пула потоков"""
         remote_items = self.get_remote_files()
         total_items = len(remote_items)
         processed = 0
+        errors = []
 
-        for item in remote_items:
-            if self.sync_cancelled:
-                self.update_status("Синхронизация отменена")
-                return
-
+        def sync_item(item_data):
+            item, index = item_data
             name, _, type_, _ = item
             local_path = os.path.join(self.current_local_dir, name)
             
-            self.root.after(0, lambda n=name, p=processed, t=total_items: [
-                self.progress_label.config(text=f"Синхронизация {p+1}/{t}: {n}"),
-                self.progress.config(value=(p/t) * 100)
-            ])
-
-            if type_ == "Папка":
-                # Создаем локальную папку
-                os.makedirs(local_path, exist_ok=True)
-                
-                # Сохраняем текущую удаленную директорию
-                current_remote = self.ftp.pwd()
-                
-                try:
-                    # Переходим в удаленную папку
-                    self.ftp.cwd(name)
+            try:
+                if type_ == "Папка":
+                    os.makedirs(local_path, exist_ok=True)
                     
-                    # Получаем список файлов в папке
-                    folder_items = []
-                    self.ftp.retrlines('LIST', folder_items.append)
-                    
-                    # Рекурсивно обрабатываем содержимое
-                    for item_info in folder_items:
-                        parts = item_info.split()
-                        if len(parts) < 9:
-                            continue
-                            
-                        item_name = ' '.join(parts[8:])
-                        is_dir = parts[0].startswith('d')
+                    with self.ftp_lock:
+                        current_remote = self.ftp.pwd()
+                        self.ftp.cwd(name)
                         
-                        if is_dir:
-                            # Рекурсивно создаем подпапки
-                            subdir_path = os.path.join(local_path, item_name)
-                            os.makedirs(subdir_path, exist_ok=True)
+                        # Получаем список всех файлов в папке
+                        folder_items = []
+                        self.ftp.retrlines('LIST', folder_items.append)
+                        
+                        # Парсим и собираем информацию о файлах
+                        files_to_download = []
+                        for item_info in folder_items:
+                            parts = item_info.split()
+                            if len(parts) < 9:
+                                continue
                             
-                            # Рекурсивно синхронизируем подпапку
-                            current_path = self.ftp.pwd()
-                            self.ftp.cwd(item_name)
-                            self.sync_directory_to_local(subdir_path)
-                            self.ftp.cwd(current_path)
-                        else:
-                            # Скачиваем файл
-                            with open(os.path.join(local_path, item_name), 'wb') as f:
-                                self.ftp.retrbinary(f'RETR {item_name}', f.write)
+                            item_name = ' '.join(parts[8:])
+                            is_dir = parts[0].startswith('d')
+                            
+                            if not is_dir:
+                                files_to_download.append((item_name, local_path))
+                            else:
+                                subdir_path = os.path.join(local_path, item_name)
+                                os.makedirs(subdir_path, exist_ok=True)
+                        
+                        # Параллельно скачиваем файлы
+                        with ThreadPoolExecutor(max_workers=5) as inner_executor:
+                            futures = []
+                            for file_name, file_path in files_to_download:
+                                futures.append(inner_executor.submit(
+                                    self._download_file_in_folder,
+                                    current_remote, name, file_name, file_path
+                                ))
+                            
+                            # Собираем ошибки
+                            for future in as_completed(futures):
+                                error = future.result()
+                                if error:
+                                    errors.append(error)
+                        
+                        self.ftp.cwd(current_remote)
+                else:
+                    # Скачиваем файл
+                    with self.ftp_lock:
+                        try:
+                            file_size = self.ftp.size(name)
+                        except:
+                            file_size = 1024 * 1024  # Предполагаем 1MB если не удалось получить размер
                     
-                    # Возвращаемся в исходную директорию
-                    self.ftp.cwd(current_remote)
+                    buffer_size = self._get_optimal_buffer_size(file_size)
                     
-                except Exception as e:
-                    self.update_status(f"Ошибка при синхронизации папки {name}: {str(e)}", error=True)
-            else:
-                # Скачиваем файл
-                with open(local_path, 'wb') as f:
-                    self.ftp.retrbinary(f'RETR {name}', f.write)
+                    with self.ftp_lock, open(local_path, 'wb') as f:
+                        self.ftp.retrbinary(f'RETR {name}', f.write, buffer_size)
+                
+                return True, name
+            except Exception as e:
+                if os.path.exists(local_path) and not os.path.isdir(local_path):
+                    try:
+                        os.remove(local_path)
+                    except:
+                        pass
+                return False, f"{name}: {str(e)}"
+
+        def _download_file_in_folder(self, base_remote, base_folder, filename, local_path):
+            try:
+                with self.ftp_lock:
+                    self.ftp.cwd(f"{base_remote}/{base_folder}")
+                    try:
+                        file_size = self.ftp.size(filename)
+                    except:
+                        file_size = 1024 * 1024
+                    
+                    buffer_size = self._get_optimal_buffer_size(file_size)
+                    with open(os.path.join(local_path, filename), 'wb') as f:
+                        self.ftp.retrbinary(f'RETR {filename}', f.write, buffer_size)
+                    return None
+            except Exception as e:
+                return f"{filename}: {str(e)}"
+            finally:
+                with self.ftp_lock:
+                    self.ftp.cwd(base_remote)
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = []
+            for i, item in enumerate(remote_items):
+                if self.sync_cancelled:
+                    self.update_status("Синхронизация отменена")
+                    return
+                futures.append(executor.submit(sync_item, (item, i)))
             
-            processed += 1
+            for future in as_completed(futures):
+                if self.sync_cancelled:
+                    self.update_status("Синхронизация отменена")
+                    return
+                
+                result, data = future.result()
+                processed += 1
+                
+                if result:
+                    self.root.after(0, lambda n=data, p=processed, t=total_items: [
+                        self.progress_label.config(text=f"Синхронизация {p}/{t}: {n}"),
+                        self.progress.config(value=(p/t) * 100)
+                    ])
+                else:
+                    errors.append(data)
 
         if not self.sync_cancelled:
             self.root.after(0, lambda: [
                 self.progress.config(value=100),
-                messagebox.showinfo("Готово", "Синхронизация завершена"),
+                messagebox.showinfo("Готово", 
+                    f"Синхронизация завершена\nОбработано: {processed}/{total_items}" +
+                    (f"\nОшибки:\n" + "\n".join(errors) if errors else "")),
                 self.refresh_local_list()
             ])
-
-    def sync_directory_to_local(self, local_path):
-        """Вспомогательный метод для рекурсивной синхронизации папок"""
-        items = []
-        self.ftp.retrlines('LIST', items.append)
-        
-        for item_info in items:
-            parts = item_info.split()
-            if len(parts) < 9:
-                continue
-                
-            name = ' '.join(parts[8:])
-            is_dir = parts[0].startswith('d')
-            
-            if is_dir:
-                # Создаем подпапку
-                subdir_path = os.path.join(local_path, name)
-                os.makedirs(subdir_path, exist_ok=True)
-                
-                # Рекурсивно синхронизируем подпапку
-                current_path = self.ftp.pwd()
-                self.ftp.cwd(name)
-                self.sync_directory_to_local(subdir_path)
-                self.ftp.cwd(current_path)
-            else:
-                # Скачиваем файл
-                with open(os.path.join(local_path, name), 'wb') as f:
-                    self.ftp.retrbinary(f'RETR {name}', f.write)
 
     def show_settings(self):
         """Окно настроек приложения"""
