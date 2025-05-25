@@ -371,7 +371,7 @@ class FTPClientApp:
         self.task_queue.put(connect_task)
 
     def upload_files(self):
-        """Загрузка выбранных локальных файлов на сервер с использованием пула потоков"""
+        """Загрузка выбранных локальных файлов на сервер"""
         if not self.ftp:
             messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
             return
@@ -381,72 +381,78 @@ class FTPClientApp:
             messagebox.showwarning("Ошибка", "Выберите файлы для загрузки")
             return
 
-        def upload_file(item_data):
-            item_id, total, index = item_data
-            values = self.local_tree.item(item_id)['values']
-            filename = values[0]
-            is_folder = values[2] == "Папка"
-            filepath = os.path.join(self.current_local_dir, filename)
-
-            try:
-                if is_folder:
-                    with self.ftp_lock:
-                        self.upload_folder(filepath, filename)
-                    self.schedule_update(self.refresh_remote_list)
-                    return True, filename
-                
-                file_size = os.path.getsize(filepath)
-                buffer_size = self._get_optimal_buffer_size(file_size)
-
-                with self.ftp_lock, open(filepath, 'rb') as f:
-                    def callback(data):
-                        f.seek(len(data), 1)
-                        progress = ((index + (f.tell() / file_size)) / total) * 100
-                        self.schedule_update(lambda: self.progress.config(value=progress))
-                    
-                    self.ftp.storbinary(f"STOR {filename}", f, buffer_size, callback)
-                    self.schedule_update(self.refresh_remote_list)
-                return True, filename
-                
-            except Exception as e:
-                return False, (filename, str(e))
-
         def upload_task():
             total = len(selected)
-            with ThreadPoolExecutor(max_workers=min(total, 5)) as executor:
-                futures = []
-                for i, item_id in enumerate(selected):
-                    futures.append(executor.submit(upload_file, (item_id, total, i)))
-                
-                success = 0
-                errors = []
-                
-                for future in as_completed(futures):
-                    result, data = future.result()
-                    if result:
-                        success += 1
-                        self.schedule_update(lambda f=data: 
-                            self.progress_label.config(text=f"Загружен файл: {f}"))
-                    else:
-                        filename, error = data
-                        errors.append(f"{filename}: {error}")
-                        self.schedule_update(lambda f=filename, e=error: [
-                            self.update_status(f"Ошибка загрузки {f}: {e}", error=True)
-                        ])
-                
+            success = 0
+            errors = []
+
+            for i, item_id in enumerate(selected):
+                values = self.local_tree.item(item_id)['values']
+                filename = values[0]
+                is_folder = values[2] == "Папка"
+                filepath = os.path.join(self.current_local_dir, filename)
+
+                try:
+                    if is_folder:
+                        with self.ftp_lock:
+                            self.upload_folder(filepath, filename)
+                        continue
+
+                    file_size = os.path.getsize(filepath)
+                    buffer_size = self._get_optimal_buffer_size(file_size)
+                    bytes_sent = 0
+
+                    with self.ftp_lock:
+                        with open(filepath, 'rb') as f:
+                            def callback(block):
+                                nonlocal bytes_sent
+                                bytes_sent += len(block)
+                                progress = ((i + (bytes_sent / file_size)) / total) * 100
+                                self.schedule_update(lambda: [
+                                    self.progress.config(value=progress),
+                                    self.progress_label.config(text=f"Загрузка {filename}: {bytes_sent}/{file_size} байт")
+                                ])
+                                return block  # Важно вернуть блок данных!
+
+                            try:
+                                self.ftp.storbinary(f'STOR {filename}', f, buffer_size, callback)
+                                
+                                # Проверяем размер загруженного файла
+                                uploaded_size = self.ftp.size(filename)
+                                if uploaded_size != file_size:
+                                    raise Exception(f"Ошибка загрузки: размер файла не совпадает (локальный: {file_size}, загружено: {uploaded_size})")
+                                
+                                success += 1
+                                self.schedule_update(lambda f=filename: 
+                                    self.progress_label.config(text=f"Загружен файл: {f}"))
+                            except Exception as e:
+                                # В случае ошибки пытаемся удалить частично загруженный файл
+                                try:
+                                    self.ftp.delete(filename)
+                                except:
+                                    pass
+                                raise e
+
+                except Exception as ex:
+                    errors.append(f"{filename}: {str(ex)}")
+                    self.schedule_update(lambda f=filename, e=ex:
+                        self.update_status(f"Ошибка загрузки {f}: {e}", error=True))
+
+            # Обновляем список файлов только если были успешные загрузки
+            if success > 0:
+                self.schedule_update(self.refresh_remote_list)
+
             self.schedule_update(lambda: [
                 self.progress.config(value=100),
                 messagebox.showinfo("Готово", 
-                    f"Успешно загружено {success}/{total} файлов" + 
-                    (f"\nОшибки:\n" + "\n".join(errors) if errors else "")),
-                self.refresh_remote_list()
+                    f"Успешно загружено {success}/{total} файлов" +
+                    (f"\nОшибки:\n" + "\n".join(errors) if errors else ""))
             ])
 
         self.task_queue.put(upload_task)
 
     def upload_folder(self, local_path, remote_folder):
         """Рекурсивная загрузка папки на сервер"""
-        # Создаем удаленную папку
         try:
             self.ftp.mkd(remote_folder)
         except:
@@ -455,23 +461,39 @@ class FTPClientApp:
         # Сохраняем текущую удаленную директорию
         current_remote = self.ftp.pwd()
         
-        # Переходим в созданную папку
-        self.ftp.cwd(remote_folder)
-        
-        # Загружаем содержимое папки
-        for item in os.listdir(local_path):
-            local_item_path = os.path.join(local_path, item)
+        try:
+            # Переходим в созданную папку
+            self.ftp.cwd(remote_folder)
             
-            if os.path.isfile(local_item_path):
-                # Загружаем файл
-                with open(local_item_path, 'rb') as f:
-                    self.ftp.storbinary(f'STOR {item}', f)
-            elif os.path.isdir(local_item_path):
-                # Рекурсивно загружаем вложенную папку
-                self.upload_folder(local_item_path, item)
-        
-        # Возвращаемся в исходную директорию
-        self.ftp.cwd(current_remote)
+            # Загружаем содержимое папки
+            for item in os.listdir(local_path):
+                local_item_path = os.path.join(local_path, item)
+                
+                if os.path.isfile(local_item_path):
+                    # Загружаем файл
+                    file_size = os.path.getsize(local_item_path)
+                    buffer_size = self._get_optimal_buffer_size(file_size)
+                    bytes_sent = 0
+
+                    with open(local_item_path, 'rb') as f:
+                        def callback(block):
+                            nonlocal bytes_sent
+                            bytes_sent += len(block)
+                            return block  # Важно вернуть блок данных!
+
+                        self.ftp.storbinary(f'STOR {item}', f, buffer_size, callback)
+                        
+                        # Проверяем размер загруженного файла
+                        uploaded_size = self.ftp.size(item)
+                        if uploaded_size != file_size:
+                            raise Exception(f"Ошибка загрузки: размер файла не совпадает (локальный: {file_size}, загружено: {uploaded_size})")
+
+                elif os.path.isdir(local_item_path):
+                    # Рекурсивно загружаем вложенную папку
+                    self.upload_folder(local_item_path, item)
+        finally:
+            # Всегда возвращаемся в исходную директорию
+            self.ftp.cwd(current_remote)
 
     def handle_connection_loss(self):
         """Обработка потери соединения"""
@@ -643,14 +665,14 @@ class FTPClientApp:
                     success += 1
                     self.schedule_update(lambda f=filename: 
                         self.progress_label.config(text=f"Скачан файл: {f}"))
-                except Exception as e:
+                except Exception as ex:
                     if os.path.exists(dest):
                         try:
                             os.remove(dest)  # Удаляем частично скачанный файл
                         except:
                             pass
-                    errors.append(f"{filename}: {str(e)}")
-                    self.schedule_update(lambda f=filename, e=e: 
+                    errors.append(f"{filename}: {str(ex)}")
+                    self.schedule_update(lambda f=filename, e=ex:
                         self.update_status(f"Ошибка скачивания {f}: {e}", error=True))
 
             self.schedule_update(lambda: [
@@ -1384,6 +1406,43 @@ class FTPClientApp:
             self.update_status(f"Ошибка чтения локальной директории: {e}", error=True)
         return items
 
+    def parse_ftp_time(self, time_str):
+        """Парсинг времени из FTP-листинга"""
+        try:
+            # Текущий год
+            current_year = datetime.now().year
+            
+            # Разбираем строку времени
+            months = {
+                'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
+                'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12
+            }
+            
+            parts = time_str.split()
+            if len(parts) != 3:
+                return time_str
+                
+            month = months.get(parts[0], 1)
+            day = int(parts[1])
+            
+            # Парсим время или год
+            if ':' in parts[2]:  # Если указано время
+                hour, minute = map(int, parts[2].split(':'))
+                # Для файлов с временем используем текущий год
+                year = current_year
+                # Если получившаяся дата в будущем, используем прошлый год
+                dt = datetime(year, month, day, hour, minute)
+                if dt > datetime.now():
+                    dt = datetime(year - 1, month, day, hour, minute)
+            else:  # Если указан год
+                year = int(parts[2])
+                dt = datetime(year, month, day)
+            
+            # Преобразуем в локальное время
+            return dt.strftime(self.settings['date_format'])
+        except Exception:
+            return time_str
+
     def get_remote_files(self):
         """Получение списка удаленных файлов"""
         items = []
@@ -1421,8 +1480,11 @@ class FTPClientApp:
                                 self.ftp.cwd(current_dir)
                             except:
                                 size = "Нет доступа"
-                                
-                        modified = ' '.join(parts[5:8])
+                        
+                        # Парсим время модификации
+                        time_str = ' '.join(parts[5:8])
+                        modified = self.parse_ftp_time(time_str)
+                        
                         items.append((name, size, "Папка" if is_dir else "Файл", modified))
                     except Exception as e:
                         # Если не удалось разобрать строку, пропускаем её
