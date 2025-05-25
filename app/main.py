@@ -232,7 +232,6 @@ class FTPClientApp:
             ("↑ Загрузить", self.upload_files),
             ("↓ Скачать", self.download_files),
             ("✕ Удалить", self.delete_selected),
-            ("🔄 Синхр.", self.sync_folders),
             ("📋 История", self.show_connection_history),
             ("⭐ Закладки", self.show_bookmarks),
             ("➕ В закладки", self.add_bookmark),
@@ -493,10 +492,13 @@ class FTPClientApp:
                         pass
                     finally:
                         self.ftp = None
-            self.root.after(0, lambda: [
-                self.connect_btn.config(text="Подключиться", command=self.connect),
-                self.update_status_indicator(False)
-            ])
+                        # Очищаем удаленное дерево
+                        self.schedule_update(lambda: [
+                            self.remote_tree.delete(*self.remote_tree.get_children()),
+                            self.remote_path_var.set("Удалённая: не подключено"),
+                            self.connect_btn.config(text="Подключиться", command=self.connect),
+                            self.update_status_indicator(False)
+                        ])
 
         self.task_queue.put(disconnect_task)
 
@@ -598,7 +600,7 @@ class FTPClientApp:
             self.update_status(f"Ошибка обновления интерфейса: {str(e)}", error=True)
 
     def download_files(self):
-        """Скачивание файлов с использованием пула потоков"""
+        """Скачивание файлов"""
         if not self.ftp:
             messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
             return
@@ -608,80 +610,56 @@ class FTPClientApp:
             messagebox.showwarning("Ошибка", "Выберите файлы для скачивания")
             return
 
-        dest_dir = filedialog.askdirectory(title="Выберите папку для сохранения")
-        if not dest_dir: return
-
-        def download_file(item_data):
-            item_id, total, index = item_data
-            filename = self.remote_tree.item(item_id, 'values')[0]
-            dest = os.path.join(dest_dir, filename)
-            
-            try:
-                # Получаем размер файла для оптимизации буфера
-                with self.ftp_lock:
-                    try:
-                        file_size = self.ftp.size(filename)
-                    except:
-                        file_size = 1024 * 1024  # Если не удалось получить размер, предполагаем 1MB
-
-                # Определяем оптимальный размер буфера
-                if file_size < 1024 * 1024:  # < 1MB
-                    buffer_size = 8192
-                elif file_size < 10 * 1024 * 1024:  # < 10MB
-                    buffer_size = 32768
-                else:  # >= 10MB
-                    buffer_size = 65536
-
-                with self.ftp_lock, open(dest, 'wb') as f:
-                    bytes_received = 0
-                    
-                    def callback(data):
-                        nonlocal bytes_received
-                        f.write(data)
-                        bytes_received += len(data)
-                        progress = ((index + (bytes_received / file_size)) / total) * 100
-                        self.schedule_update(lambda: self.progress.config(value=progress))
-
-                    self.ftp.retrbinary(f"RETR {filename}", callback, buffer_size)
-                return True, filename
-            except Exception as e:
-                if os.path.exists(dest):
-                    try:
-                        os.remove(dest)  # Удаляем частично скачанный файл
-                    except:
-                        pass
-                return False, (filename, str(e))
-
         def download_task():
             total = len(selected)
-            with ThreadPoolExecutor(max_workers=min(total, 5)) as executor:
-                futures = []
-                for i, item_id in enumerate(selected):
-                    futures.append(executor.submit(download_file, (item_id, total, i)))
+            success = 0
+            errors = []
+
+            for i, item_id in enumerate(selected):
+                filename = self.remote_tree.item(item_id, 'values')[0]
+                dest = os.path.join(self.current_local_dir, filename)
                 
-                success = 0
-                errors = []
-                
-                for future in as_completed(futures):
-                    result, data = future.result()
-                    if result:
-                        success += 1
-                        self.schedule_update(lambda f=data: 
-                            self.progress_label.config(text=f"Скачан файл: {f}"))
-                    else:
-                        filename, error = data
-                        errors.append(f"{filename}: {error}")
-                        self.schedule_update(lambda f=filename, e=error: [
-                            self.update_status(f"Ошибка скачивания {f}: {e}", error=True)
-                        ])
-                
-                self.schedule_update(lambda: [
-                    self.progress.config(value=100),
-                    messagebox.showinfo("Готово", 
-                        f"Успешно скачано {success}/{total} файлов" + 
-                        (f"\nОшибки:\n" + "\n".join(errors) if errors else "")),
-                    self.refresh_local_list()
-                ])
+                try:
+                    # Получаем размер файла для оптимизации буфера
+                    with self.ftp_lock:
+                        try:
+                            file_size = self.ftp.size(filename)
+                        except:
+                            file_size = 1024 * 1024  # Если не удалось получить размер, предполагаем 1MB
+
+                    buffer_size = self._get_optimal_buffer_size(file_size)
+
+                    with self.ftp_lock, open(dest, 'wb') as f:
+                        bytes_received = 0
+                        
+                        def callback(data):
+                            nonlocal bytes_received
+                            f.write(data)
+                            bytes_received += len(data)
+                            progress = ((i + (bytes_received / file_size)) / total) * 100
+                            self.schedule_update(lambda: self.progress.config(value=progress))
+
+                        self.ftp.retrbinary(f"RETR {filename}", callback, buffer_size)
+                    success += 1
+                    self.schedule_update(lambda f=filename: 
+                        self.progress_label.config(text=f"Скачан файл: {f}"))
+                except Exception as e:
+                    if os.path.exists(dest):
+                        try:
+                            os.remove(dest)  # Удаляем частично скачанный файл
+                        except:
+                            pass
+                    errors.append(f"{filename}: {str(e)}")
+                    self.schedule_update(lambda f=filename, e=e: 
+                        self.update_status(f"Ошибка скачивания {f}: {e}", error=True))
+
+            self.schedule_update(lambda: [
+                self.progress.config(value=100),
+                self.refresh_local_list(),
+                messagebox.showinfo("Готово", 
+                    f"Успешно скачано {success}/{total} файлов" +
+                    (f"\nОшибки:\n" + "\n".join(errors) if errors else ""))
+            ])
 
         self.task_queue.put(download_task)
 
@@ -1394,7 +1372,10 @@ class FTPClientApp:
                     else:
                         size = humanize.naturalsize(stat.st_size)
                     
-                    modified = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
+                    # Преобразуем время в локальное
+                    local_time = datetime.fromtimestamp(stat.st_mtime)
+                    modified = local_time.strftime(self.settings['date_format'])
+                    
                     items.append((item, size, "Папка" if is_dir else "Файл", modified))
                 except Exception as e:
                     # Если не удалось получить информацию о файле, все равно добавляем его
