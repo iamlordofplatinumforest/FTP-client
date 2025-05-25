@@ -63,6 +63,9 @@ class FTPClientApp:
         self.current_sort_column = None
         self.sort_reverse = False
 
+        # Создаем главное меню до создания других виджетов
+        self.create_main_menu()
+        
         self.create_widgets()
         self.setup_bindings()
         self.start_worker()
@@ -117,15 +120,181 @@ class FTPClientApp:
         style.configure("Treeview", rowheight=25)
         style.configure("Treeview.Heading", font=('Helvetica', 10, 'bold'))
 
+        # Создаем основные элементы интерфейса
         self.create_connection_panel()
-
         self.create_status_panel()
-
         self.create_file_panels()
-
         self.create_progress_bar()
-
         self.create_toolbar()
+
+    def create_main_menu(self):
+        """Создание главного меню"""
+        # Создаем главное меню
+        menubar = tk.Menu(self.root)
+        
+        # Меню подключения
+        connection_menu = tk.Menu(menubar, tearoff=False)
+        menubar.add_cascade(label="Подключение", menu=connection_menu)
+        connection_menu.add_command(label="Быстрое подключение", command=self.show_quick_connect)
+        connection_menu.add_command(label="История подключений", command=self.show_connection_history)
+        connection_menu.add_command(label="Закладки", command=self.show_bookmarks)
+        connection_menu.add_command(label="Добавить в закладки", command=self.add_bookmark)
+        connection_menu.add_separator()
+        connection_menu.add_command(label="Отключиться", command=self.disconnect, state="disabled")
+        self.connection_menu = connection_menu
+
+        # Меню операций
+        operations_menu = tk.Menu(menubar, tearoff=False)
+        menubar.add_cascade(label="Операции", menu=operations_menu)
+        operations_menu.add_command(label="Создать папку", command=self.create_remote_dir)
+        operations_menu.add_command(label="Загрузить файлы", command=self.upload_files)
+        operations_menu.add_command(label="Скачать файлы", command=self.download_files)
+        operations_menu.add_command(label="Удалить", command=self.delete_selected)
+        operations_menu.add_separator()
+        operations_menu.add_command(label="Обновить списки", command=self.refresh_lists)
+
+        # Меню вид
+        view_menu = tk.Menu(menubar, tearoff=False)
+        menubar.add_cascade(label="Вид", menu=view_menu)
+        
+        # Создаем переменные для чекбоксов
+        self.show_hidden_var = tk.BooleanVar(value=self.settings['show_hidden_files'])
+        self.sort_folders_var = tk.BooleanVar(value=self.settings['sort_folders_first'])
+        
+        view_menu.add_checkbutton(
+            label="Показывать скрытые файлы",
+            variable=self.show_hidden_var,
+            command=lambda: self.toggle_setting('show_hidden_files')
+        )
+        view_menu.add_checkbutton(
+            label="Сортировать папки первыми",
+            variable=self.sort_folders_var,
+            command=lambda: self.toggle_setting('sort_folders_first')
+        )
+
+        # Меню настройки
+        settings_menu = tk.Menu(menubar, tearoff=False)
+        menubar.add_cascade(label="Настройки", menu=settings_menu)
+        settings_menu.add_command(label="Параметры", command=self.show_settings)
+
+        # Меню справка
+        help_menu = tk.Menu(menubar, tearoff=False)
+        menubar.add_cascade(label="Справка", menu=help_menu)
+        help_menu.add_command(label="О программе", command=self.show_about)
+
+        # Устанавливаем меню для главного окна
+        self.root['menu'] = menubar
+
+    def show_quick_connect(self):
+        """Показать окно быстрого подключения"""
+        quick_connect = tk.Toplevel(self.root)
+        quick_connect.title("Быстрое подключение")
+        quick_connect.geometry("300x200")
+        quick_connect.transient(self.root)
+        quick_connect.grab_set()
+
+        # Центрируем окно
+        quick_connect.geometry("+%d+%d" % (
+            self.root.winfo_rootx() + self.root.winfo_width()//2 - 150,
+            self.root.winfo_rooty() + self.root.winfo_height()//2 - 100
+        ))
+
+        frame = ttk.Frame(quick_connect, padding="10")
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        # Поля ввода
+        ttk.Label(frame, text="Сервер:").grid(row=0, column=0, sticky="e", pady=2)
+        host_entry = ttk.Entry(frame)
+        host_entry.insert(0, "localhost")
+        host_entry.grid(row=0, column=1, sticky="ew", pady=2)
+
+        ttk.Label(frame, text="Порт:").grid(row=1, column=0, sticky="e", pady=2)
+        port_entry = ttk.Entry(frame)
+        port_entry.insert(0, "21")
+        port_entry.grid(row=1, column=1, sticky="ew", pady=2)
+
+        ttk.Label(frame, text="Пользователь:").grid(row=2, column=0, sticky="e", pady=2)
+        user_entry = ttk.Entry(frame)
+        user_entry.insert(0, "anonymous")
+        user_entry.grid(row=2, column=1, sticky="ew", pady=2)
+
+        ttk.Label(frame, text="Пароль:").grid(row=3, column=0, sticky="e", pady=2)
+        pass_entry = ttk.Entry(frame, show="*")
+        pass_entry.grid(row=3, column=1, sticky="ew", pady=2)
+
+        # Кнопки
+        btn_frame = ttk.Frame(frame)
+        btn_frame.grid(row=4, column=0, columnspan=2, pady=10)
+
+        ttk.Button(btn_frame, text="Подключиться", 
+                  command=lambda: self.quick_connect(
+                      host_entry.get(), port_entry.get(),
+                      user_entry.get(), pass_entry.get(),
+                      quick_connect)).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(btn_frame, text="Отмена",
+                  command=quick_connect.destroy).pack(side=tk.LEFT, padx=5)
+
+    def quick_connect(self, host, port, user, password, window):
+        """Быстрое подключение к серверу"""
+        # Заполняем поля подключения
+        self.host_entry.delete(0, tk.END)
+        self.host_entry.insert(0, host)
+        
+        self.port_entry.delete(0, tk.END)
+        self.port_entry.insert(0, port)
+        
+        self.user_entry.delete(0, tk.END)
+        self.user_entry.insert(0, user)
+        
+        self.password_entry.delete(0, tk.END)
+        self.password_entry.insert(0, password)
+        
+        # Закрываем окно быстрого подключения
+        window.destroy()
+        
+        # Подключаемся
+        self.connect()
+
+    def toggle_setting(self, setting_name):
+        """Переключение настройки"""
+        self.settings[setting_name] = not self.settings[setting_name]
+        self.save_settings(self.settings, None)
+        self.refresh_lists()
+
+    def show_about(self):
+        """Показать окно 'О программе'"""
+        about_window = tk.Toplevel(self.root)
+        about_window.title("О программе")
+        about_window.geometry("400x300")
+        about_window.transient(self.root)
+        about_window.grab_set()
+
+        # Центрируем окно
+        about_window.geometry("+%d+%d" % (
+            self.root.winfo_rootx() + self.root.winfo_width()//2 - 200,
+            self.root.winfo_rooty() + self.root.winfo_height()//2 - 150
+        ))
+
+        frame = ttk.Frame(about_window, padding="20")
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, text="FTP Клиент", 
+                 font=('Helvetica', 16, 'bold')).pack(pady=10)
+        
+        ttk.Label(frame, text="Версия 1.0", 
+                 font=('Helvetica', 10)).pack()
+        
+        ttk.Label(frame, text="\n© 2024 Все права защищены\n", 
+                 font=('Helvetica', 9)).pack()
+        
+        ttk.Label(frame, text="Программа для работы с FTP-серверами\n" +
+                            "Поддерживает основные операции с файлами,\n" +
+                            "закладки и историю подключений.", 
+                 justify=tk.CENTER).pack(pady=10)
+        
+        ttk.Button(frame, text="Закрыть", 
+                  command=about_window.destroy).pack(pady=10)
 
     def create_connection_panel(self):
         frame = ttk.LabelFrame(self.root, text="Подключение")
@@ -231,11 +400,7 @@ class FTPClientApp:
             ("✚ Папка", self.create_remote_dir),
             ("↑ Загрузить", self.upload_files),
             ("↓ Скачать", self.download_files),
-            ("✕ Удалить", self.delete_selected),
-            ("📋 История", self.show_connection_history),
-            ("⭐ Закладки", self.show_bookmarks),
-            ("➕ В закладки", self.add_bookmark),
-            ("⚙ Настройки", self.show_settings)
+            ("✕ Удалить", self.delete_selected)
         ]
 
         for text, command in buttons:
@@ -324,12 +489,11 @@ class FTPClientApp:
         Thread(target=monitor, daemon=True).start()
 
     def connect(self):
-        """Обновленный метод подключения с поддержкой SSL/TLS"""
+        """Обновленный метод подключения с обновлением меню"""
         host = self.host_entry.get()
         port = int(self.port_entry.get())
         user = self.user_entry.get()
         password = self.password_entry.get()
-        use_tls = True  # Можно добавить чекбокс в интерфейс
 
         def connect_task():
             try:
@@ -359,11 +523,13 @@ class FTPClientApp:
                     self.root.after(0, lambda: [
                         self.update_status_indicator(True),
                         self.connect_btn.config(text="Отключиться", command=self.disconnect),
-                        self.refresh_remote_list()
+                        self.refresh_remote_list(),
+                        # Обновляем состояние пункта меню
+                        self.connection_menu.entryconfig("Отключиться", state="normal")
                     ])
             except Exception as e:
-                error_msg = str(e)  # Сохраняем сообщение об ошибке в переменную
-                self.root.after(0, lambda msg=error_msg: [  # Передаем сообщение как параметр лямбды
+                error_msg = str(e)
+                self.root.after(0, lambda msg=error_msg: [
                     messagebox.showerror("Ошибка", f"Ошибка подключения: {msg}"),
                     self.update_status_indicator(False)
                 ])
@@ -502,7 +668,7 @@ class FTPClientApp:
         self.disconnect()
 
     def disconnect(self):
-        """Модифицированный метод отключения"""
+        """Обновленный метод отключения с обновлением меню"""
         self.monitor_running = False
 
         def disconnect_task():
@@ -514,12 +680,13 @@ class FTPClientApp:
                         pass
                     finally:
                         self.ftp = None
-                        # Очищаем удаленное дерево
                         self.schedule_update(lambda: [
                             self.remote_tree.delete(*self.remote_tree.get_children()),
                             self.remote_path_var.set("Удалённая: не подключено"),
                             self.connect_btn.config(text="Подключиться", command=self.connect),
-                            self.update_status_indicator(False)
+                            self.update_status_indicator(False),
+                            # Обновляем состояние пункта меню
+                            self.connection_menu.entryconfig("Отключиться", state="disabled")
                         ])
 
         self.task_queue.put(disconnect_task)
