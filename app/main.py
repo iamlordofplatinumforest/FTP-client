@@ -474,13 +474,21 @@ class FTPClientApp:
                     modified = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
                     items.append((item, size, "Папка" if os.path.isdir(path) else "Файл", modified))
 
-                self.root.after(0, lambda: (
-                    self.local_tree.delete(*self.local_tree.get_children()),
-                    [self.local_tree.insert("", tk.END, values=item) for item in items],
+                # Применяем сортировку и фильтрацию
+                items = self.filter_hidden_files(items)
+                items = self.sort_items(items)
+
+                def update_gui():
+                    self.local_tree.delete(*self.local_tree.get_children())
+                    for item in items:
+                        self.local_tree.insert("", tk.END, values=item)
                     self.local_path_var.set(f"Локальная: {self.current_local_dir}")
-                ))
+
+                self.root.after(0, update_gui)
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Ошибка", f"Ошибка обновления: {e}"))
+                def show_error():
+                    messagebox.showerror("Ошибка", f"Ошибка обновления: {str(e)}")
+                self.root.after(0, show_error)
 
         self.task_queue.put(refresh_task)
 
@@ -965,10 +973,6 @@ class FTPClientApp:
         interface_frame = ttk.LabelFrame(general_frame, text="Интерфейс")
         interface_frame.pack(fill=tk.X, padx=5, pady=5)
 
-        dark_mode_var = tk.BooleanVar(value=self.settings['dark_mode'])
-        ttk.Checkbutton(interface_frame, text="Тёмная тема",
-                       variable=dark_mode_var).pack(anchor="w", padx=5, pady=2)
-
         sort_folders_var = tk.BooleanVar(value=self.settings['sort_folders_first'])
         ttk.Checkbutton(interface_frame, text="Показывать папки первыми",
                        variable=sort_folders_var).pack(anchor="w", padx=5, pady=2)
@@ -1016,7 +1020,6 @@ class FTPClientApp:
             'show_hidden_files': show_hidden_var.get(),
             'confirm_delete': confirm_delete_var.get(),
             'confirm_overwrite': confirm_overwrite_var.get(),
-            'dark_mode': dark_mode_var.get(),
             'sort_folders_first': sort_folders_var.get(),
             'date_format': self.settings['date_format']
         }, settings_window)).pack(side=tk.RIGHT, padx=5)
@@ -1040,7 +1043,6 @@ class FTPClientApp:
             
             # Применяем некоторые настройки сразу
             self.current_local_dir = self.settings['default_local_dir']
-            self.cache_ttl = self.settings['cache_ttl']
             
             # Обновляем интерфейс
             self.refresh_lists()
@@ -1062,11 +1064,12 @@ class FTPClientApp:
             print(f"Ошибка загрузки настроек: {e}")
 
     def get_cached_remote_list(self):
+        """Получение кэшированного списка удаленных файлов"""
         current_path = self.ftp.pwd()
         current_time = time.time()
         
         if (current_path in self.remote_cache and 
-            current_time - self.remote_cache[current_path][0] < self.cache_ttl):
+            current_time - self.remote_cache[current_path][0] < self.settings['cache_ttl']):
             return self.remote_cache[current_path][1]
             
         return None
@@ -1557,6 +1560,172 @@ class FTPClientApp:
         else:
             self.password_entry.configure(show="")
             self.show_password.set(True)
+
+    def create_local_dir(self):
+        """Создание локальной папки"""
+        dirname = simpledialog.askstring("Создать папку", "Введите имя папки:")
+        if dirname:
+            try:
+                new_dir = os.path.join(self.current_local_dir, dirname)
+                os.makedirs(new_dir, exist_ok=True)
+                self.refresh_local_list()
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось создать папку: {str(e)}")
+
+    def open_local_file(self):
+        """Открытие локального файла"""
+        selected = self.local_tree.selection()
+        if selected:
+            filename = self.local_tree.item(selected[0], 'values')[0]
+            full_path = os.path.join(self.current_local_dir, filename)
+            if os.path.isfile(full_path):
+                try:
+                    import subprocess
+                    import sys
+                    if sys.platform == 'darwin':  # macOS
+                        subprocess.run(['open', full_path])
+                    elif sys.platform == 'win32':  # Windows
+                        os.startfile(full_path)
+                    else:  # Linux
+                        subprocess.run(['xdg-open', full_path])
+                except Exception as e:
+                    messagebox.showerror("Ошибка", f"Не удалось открыть файл: {str(e)}")
+
+    def rename_local(self):
+        """Переименование локального файла"""
+        selected = self.local_tree.selection()
+        if selected:
+            old_name = self.local_tree.item(selected[0], 'values')[0]
+            new_name = simpledialog.askstring(
+                "Переименование",
+                "Введите новое имя:",
+                initialvalue=old_name
+            )
+            if new_name and new_name != old_name:
+                try:
+                    src = os.path.join(self.current_local_dir, old_name)
+                    dst = os.path.join(self.current_local_dir, new_name)
+                    os.rename(src, dst)
+                    self.refresh_local_list()
+                except Exception as e:
+                    messagebox.showerror("Ошибка", f"Ошибка переименования: {str(e)}")
+
+    def delete_local(self):
+        """Удаление локального файла"""
+        selected = self.local_tree.selection()
+        if selected:
+            filename = self.local_tree.item(selected[0], 'values')[0]
+            path = os.path.join(self.current_local_dir, filename)
+
+            if not self.settings['confirm_delete'] or \
+               messagebox.askyesno("Подтверждение", f"Удалить {filename}?"):
+                try:
+                    if os.path.isdir(path):
+                        os.rmdir(path)
+                    else:
+                        os.remove(path)
+                    self.refresh_local_list()
+                except Exception as e:
+                    messagebox.showerror("Ошибка", f"Не удалось удалить: {str(e)}")
+
+    def rename_remote(self):
+        """Переименование файла/папки на сервере"""
+        if not self.ftp:
+            messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
+            return
+
+        selected = self.remote_tree.selection()
+        if not selected:
+            messagebox.showwarning("Ошибка", "Выберите файл для переименования")
+            return
+
+        old_name = self.remote_tree.item(selected[0], 'values')[0]
+        new_name = simpledialog.askstring(
+            "Переименование",
+            "Введите новое имя:",
+            initialvalue=old_name
+        )
+
+        if new_name and new_name != old_name:
+            try:
+                self.ftp.rename(old_name, new_name)
+                self.refresh_remote_list()
+                messagebox.showinfo("Успех", "Файл успешно переименован")
+            except error_perm as e:
+                messagebox.showerror("Ошибка",
+                                   f"Нет прав на переименование: {str(e)}")
+            except Exception as e:
+                messagebox.showerror("Ошибка",
+                                   f"Ошибка переименования: {str(e)}")
+
+    def delete_remote(self):
+        """Удаление файла/папки на сервере"""
+        if not self.ftp:
+            messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
+            return
+
+        selected = self.remote_tree.selection()
+        if not selected:
+            messagebox.showwarning("Ошибка", "Выберите файл для удаления")
+            return
+
+        filename = self.remote_tree.item(selected[0], 'values')[0]
+
+        if not self.settings['confirm_delete'] or \
+           messagebox.askyesno("Подтверждение", f"Удалить {filename}?"):
+            try:
+                # Проверяем, это файл или директория
+                is_dir = False
+                try:
+                    self.ftp.cwd(filename)
+                    is_dir = True
+                    self.ftp.cwd('..')
+                except:
+                    pass
+
+                if is_dir:
+                    self.ftp.rmd(filename)
+                else:
+                    self.ftp.delete(filename)
+
+                self.refresh_remote_list()
+                messagebox.showinfo("Успех", "Файл успешно удален")
+
+            except error_perm as e:
+                messagebox.showerror("Ошибка", f"Нет прав на удаление: {str(e)}")
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Ошибка удаления: {str(e)}")
+
+    def change_local_directory(self):
+        """Изменение локальной директории"""
+        new_dir = filedialog.askdirectory(initialdir=self.current_local_dir)
+        if new_dir:
+            self.current_local_dir = new_dir
+            self.local_path_var.set(f"Локальная: {self.current_local_dir}")
+            self.refresh_local_list()
+
+    def sort_items(self, items):
+        """Сортировка элементов с учетом настроек"""
+        if self.settings['sort_folders_first']:
+            # Разделяем папки и файлы
+            folders = [item for item in items if item[2] == "Папка"]
+            files = [item for item in items if item[2] == "Файл"]
+            
+            # Сортируем каждую группу отдельно
+            folders.sort(key=lambda x: x[0].lower())  # Сортировка папок по имени
+            files.sort(key=lambda x: x[0].lower())    # Сортировка файлов по имени
+            
+            # Объединяем списки
+            return folders + files
+        else:
+            # Просто сортируем все элементы по имени
+            return sorted(items, key=lambda x: x[0].lower())
+
+    def filter_hidden_files(self, items):
+        """Фильтрация скрытых файлов"""
+        if not self.settings['show_hidden_files']:
+            return [item for item in items if not item[0].startswith('.')]
+        return items
 
 if __name__ == "__main__":
     root = tk.Tk()
