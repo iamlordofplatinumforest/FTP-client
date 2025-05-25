@@ -579,10 +579,23 @@ class FTPClientApp:
 
     def update_remote_tree(self, items):
         """Обновление удаленного дерева файлов"""
-        self.remote_tree.delete(*self.remote_tree.get_children())
-        for item in items:
-            self.remote_tree.insert("", tk.END, values=item)
-        self.remote_path_var.set(f"Удалённая: {self.ftp.pwd()}")
+        try:
+            self.remote_tree.delete(*self.remote_tree.get_children())
+            for item in items:
+                self.remote_tree.insert("", tk.END, values=item)
+            
+            # Безопасное обновление пути
+            if self.ftp:
+                try:
+                    with self.ftp_lock:
+                        current_path = self.ftp.pwd()
+                    self.remote_path_var.set(f"Удалённая: {current_path}")
+                except:
+                    self.remote_path_var.set("Удалённая: Ошибка получения пути")
+            else:
+                self.remote_path_var.set("Удалённая: не подключено")
+        except Exception as e:
+            self.update_status(f"Ошибка обновления интерфейса: {str(e)}", error=True)
 
     def download_files(self):
         """Скачивание файлов с использованием пула потоков"""
@@ -686,35 +699,65 @@ class FTPClientApp:
         def delete_task():
             total = len(selected)
             success = 0
-            for i, item_id in enumerate(selected):
-                filename = self.remote_tree.item(item_id, 'values')[0]
-                try:
-                    is_dir = False
-                    try:
-                        self.ftp.cwd(filename)
-                        self.ftp.cwd('..')
-                        is_dir = True
-                    except:
-                        pass
-
-                    if is_dir:
-                        self.ftp.rmd(filename)
-                    else:
-                        self.ftp.delete(filename)
-                    success += 1
-                    self.schedule_update(self.refresh_remote_list)
-                except Exception as e:
-                    error_msg = str(e)
-                    self.schedule_update(lambda f=filename, msg=error_msg: [
-                        messagebox.showerror("Ошибка", f"Ошибка удаления {f}: {msg}"),
-                        self.update_status(f"Ошибка: {msg}", error=True)
-                    ])
+            errors = []
             
-            self.schedule_update(lambda: [
-                self.progress.config(value=100),
-                messagebox.showinfo("Готово", f"Удалено {success}/{total} файлов"),
-                self.refresh_remote_list()
-            ])
+            try:
+                for i, item_id in enumerate(selected):
+                    if not self.ftp:
+                        raise Exception("Соединение потеряно")
+                    
+                    filename = self.remote_tree.item(item_id, 'values')[0]
+                    try:
+                        with self.ftp_lock:
+                            is_dir = False
+                            try:
+                                self.ftp.cwd(filename)
+                                self.ftp.cwd('..')
+                                is_dir = True
+                            except:
+                                pass
+
+                            if is_dir:
+                                self.ftp.rmd(filename)
+                            else:
+                                self.ftp.delete(filename)
+                            success += 1
+                    except Exception as e:
+                        errors.append(f"{filename}: {str(e)}")
+                        
+                # Обновляем список файлов только если были успешные удаления
+                if success > 0:
+                    try:
+                        with self.ftp_lock:
+                            files = []
+                            self.ftp.retrlines('LIST', files.append)
+                            parsed = []
+                            for line in files:
+                                parts = line.split()
+                                if len(parts) < 9: continue
+                                name = ' '.join(parts[8:])
+                                size = humanize.naturalsize(int(parts[4])) if parts[0].startswith('-') else ""
+                                file_type = "Папка" if parts[0].startswith('d') else "Файл"
+                                modified = ' '.join(parts[5:8])
+                                parsed.append((name, size, file_type, modified))
+                            
+                            self.schedule_update(lambda: self.update_remote_tree(parsed))
+                    except Exception as e:
+                        errors.append(f"Ошибка обновления списка: {str(e)}")
+                
+                # Показываем результат операции
+                self.schedule_update(lambda: [
+                    self.progress.config(value=100),
+                    messagebox.showinfo("Готово", 
+                        f"Удалено {success}/{total} файлов" +
+                        (f"\nОшибки:\n" + "\n".join(errors) if errors else "")),
+                ])
+                
+            except Exception as e:
+                self.schedule_update(lambda: [
+                    messagebox.showerror("Ошибка", f"Критическая ошибка: {str(e)}"),
+                    self.update_status("Ошибка удаления файлов", error=True)
+                ])
 
         self.task_queue.put(delete_task)
 
@@ -939,6 +982,7 @@ class FTPClientApp:
                     self.ftp.cwd(base_remote)
 
         def _get_optimal_buffer_size(self, file_size):
+            """Определение оптимального размера буфера на основе размера файла"""
             if file_size < 1024 * 1024:  # < 1MB
                 return 8192
             elif file_size < 10 * 1024 * 1024:  # < 10MB
@@ -996,45 +1040,54 @@ class FTPClientApp:
                     os.makedirs(local_path, exist_ok=True)
                     
                     with self.ftp_lock:
-                        current_remote = self.ftp.pwd()
-                        self.ftp.cwd(name)
-                        
-                        # Получаем список всех файлов в папке
-                        folder_items = []
-                        self.ftp.retrlines('LIST', folder_items.append)
-                        
-                        # Парсим и собираем информацию о файлах
-                        files_to_download = []
-                        for item_info in folder_items:
-                            parts = item_info.split()
-                            if len(parts) < 9:
-                                continue
+                        try:
+                            current_remote = self.ftp.pwd()
+                            self.ftp.cwd(name)
                             
-                            item_name = ' '.join(parts[8:])
-                            is_dir = parts[0].startswith('d')
+                            # Получаем список всех файлов в папке
+                            folder_items = []
+                            self.ftp.retrlines('LIST', folder_items.append)
                             
-                            if not is_dir:
-                                files_to_download.append((item_name, local_path))
-                            else:
-                                subdir_path = os.path.join(local_path, item_name)
-                                os.makedirs(subdir_path, exist_ok=True)
-                        
-                        # Параллельно скачиваем файлы
-                        with ThreadPoolExecutor(max_workers=5) as inner_executor:
-                            futures = []
-                            for file_name, file_path in files_to_download:
-                                futures.append(inner_executor.submit(
-                                    self._download_file_in_folder,
-                                    current_remote, name, file_name, file_path
-                                ))
+                            # Парсим и собираем информацию о файлах
+                            files_to_download = []
+                            for item_info in folder_items:
+                                parts = item_info.split()
+                                if len(parts) < 9:
+                                    continue
+
+                                item_name = ' '.join(parts[8:])
+                                is_dir = parts[0].startswith('d')
+                                
+                                if not is_dir:
+                                    files_to_download.append((item_name, local_path))
+                                else:
+                                    subdir_path = os.path.join(local_path, item_name)
+                                    os.makedirs(subdir_path, exist_ok=True)
                             
-                            # Собираем ошибки
-                            for future in as_completed(futures):
-                                error = future.result()
-                                if error:
-                                    errors.append(error)
-                        
-                        self.ftp.cwd(current_remote)
+                            # Возвращаемся в исходную директорию
+                            self.ftp.cwd(current_remote)
+                            
+                            # Параллельно скачиваем файлы
+                            with ThreadPoolExecutor(max_workers=5) as inner_executor:
+                                futures = []
+                                for file_name, file_path in files_to_download:
+                                    futures.append(inner_executor.submit(
+                                        self._download_file_in_folder,
+                                        current_remote, name, file_name, file_path
+                                    ))
+                                
+                                # Собираем ошибки
+                                for future in as_completed(futures):
+                                    error = future.result()
+                                    if error:
+                                        errors.append(error)
+                        except Exception as e:
+                            errors.append(f"{name}: {str(e)}")
+                            if 'current_remote' in locals():
+                                try:
+                                    self.ftp.cwd(current_remote)
+                                except:
+                                    pass
                 else:
                     # Скачиваем файл
                     with self.ftp_lock:
@@ -1043,38 +1096,22 @@ class FTPClientApp:
                         except:
                             file_size = 1024 * 1024  # Предполагаем 1MB если не удалось получить размер
                     
-                    buffer_size = self._get_optimal_buffer_size(file_size)
+                        buffer_size = self._get_optimal_buffer_size(file_size)
+                        
+                        try:
+                            with self.ftp_lock, open(local_path, 'wb') as f:
+                                self.ftp.retrbinary(f'RETR {name}', f.write, buffer_size)
+                        except Exception as e:
+                            if os.path.exists(local_path):
+                                try:
+                                    os.remove(local_path)
+                                except:
+                                    pass
+                            raise e
                     
-                    with self.ftp_lock, open(local_path, 'wb') as f:
-                        self.ftp.retrbinary(f'RETR {name}', f.write, buffer_size)
-                
-                return True, name
+                    return True, name
             except Exception as e:
-                if os.path.exists(local_path) and not os.path.isdir(local_path):
-                    try:
-                        os.remove(local_path)
-                    except:
-                        pass
                 return False, f"{name}: {str(e)}"
-
-        def _download_file_in_folder(self, base_remote, base_folder, filename, local_path):
-            try:
-                with self.ftp_lock:
-                    self.ftp.cwd(f"{base_remote}/{base_folder}")
-                    try:
-                        file_size = self.ftp.size(filename)
-                    except:
-                        file_size = 1024 * 1024
-                    
-                    buffer_size = self._get_optimal_buffer_size(file_size)
-                    with open(os.path.join(local_path, filename), 'wb') as f:
-                        self.ftp.retrbinary(f'RETR {filename}', f.write, buffer_size)
-                    return None
-            except Exception as e:
-                return f"{filename}: {str(e)}"
-            finally:
-                with self.ftp_lock:
-                    self.ftp.cwd(base_remote)
 
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = []
@@ -1912,6 +1949,52 @@ class FTPClientApp:
         if not self.settings['show_hidden_files']:
             return [item for item in items if not item[0].startswith('.')]
         return items
+
+    def _get_optimal_buffer_size(self, file_size):
+        """Определение оптимального размера буфера на основе размера файла"""
+        if file_size < 1024 * 1024:  # < 1MB
+            return 8192
+        elif file_size < 10 * 1024 * 1024:  # < 10MB
+            return 32768
+        else:  # >= 10MB
+            return 65536
+
+    def _download_file_in_folder(self, base_remote, base_folder, filename, local_path):
+        """Скачивание файла из папки на FTP-сервере"""
+        try:
+            with self.ftp_lock:
+                try:
+                    # Переходим в нужную директорию
+                    current_dir = self.ftp.pwd()
+                    self.ftp.cwd(f"{base_remote}/{base_folder}")
+                except Exception as e:
+                    return f"Ошибка доступа к директории {base_folder}: {str(e)}"
+
+                try:
+                    # Пытаемся получить размер файла
+                    try:
+                        file_size = self.ftp.size(filename)
+                    except:
+                        file_size = 1024 * 1024  # По умолчанию 1MB если не удалось получить размер
+
+                    buffer_size = self._get_optimal_buffer_size(file_size)
+                    
+                    # Создаем все необходимые директории
+                    os.makedirs(os.path.dirname(os.path.join(local_path, filename)), exist_ok=True)
+                    
+                    # Скачиваем файл
+                    with open(os.path.join(local_path, filename), 'wb') as f:
+                        self.ftp.retrbinary(f'RETR {filename}', f.write, buffer_size)
+                    
+                    # Возвращаемся в исходную директорию
+                    self.ftp.cwd(current_dir)
+                    return None
+                except Exception as e:
+                    # В случае ошибки возвращаемся в исходную директорию
+                    self.ftp.cwd(current_dir)
+                    return f"Ошибка скачивания файла {filename}: {str(e)}"
+        except Exception as e:
+            return f"Критическая ошибка при скачивании {filename}: {str(e)}"
 
 if __name__ == "__main__":
     root = tk.Tk()
