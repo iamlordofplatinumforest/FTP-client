@@ -818,7 +818,12 @@ class FTPClientApp:
 
                     buffer_size = self._get_optimal_buffer_size(file_size)
 
-                    with self.ftp_lock, open(dest, 'wb') as f:
+                    # Устанавливаем бинарный режим передачи
+                    with self.ftp_lock:
+                        self.ftp.voidcmd('TYPE I')
+
+                    temp_dest = dest + '.tmp'
+                    with self.ftp_lock, open(temp_dest, 'wb') as f:
                         bytes_received = 0
                         
                         def callback(data):
@@ -826,16 +831,30 @@ class FTPClientApp:
                             f.write(data)
                             bytes_received += len(data)
                             progress = ((i + (bytes_received / file_size)) / total) * 100
-                            self.schedule_update(lambda: self.progress.config(value=progress))
+                            self.schedule_update(lambda: [
+                                self.progress.config(value=progress),
+                                self.progress_label.config(text=f"Скачивание {filename}: {bytes_received}/{file_size} байт")
+                            ])
 
                         self.ftp.retrbinary(f"RETR {filename}", callback, buffer_size)
+                    
+                    # Проверяем размер скачанного файла
+                    downloaded_size = os.path.getsize(temp_dest)
+                    if downloaded_size != file_size:
+                        raise Exception(f"Ошибка скачивания: размер файла не совпадает (ожидалось: {file_size}, получено: {downloaded_size})")
+                    
+                    # Если все в порядке, переименовываем временный файл
+                    if os.path.exists(dest):
+                        os.remove(dest)
+                    os.rename(temp_dest, dest)
+                    
                     success += 1
                     self.schedule_update(lambda f=filename: 
                         self.progress_label.config(text=f"Скачан файл: {f}"))
                 except Exception as ex:
-                    if os.path.exists(dest):
+                    if os.path.exists(temp_dest):
                         try:
-                            os.remove(dest)  # Удаляем частично скачанный файл
+                            os.remove(temp_dest)  # Удаляем временный файл при ошибке
                         except:
                             pass
                     errors.append(f"{filename}: {str(ex)}")
