@@ -1,7 +1,3 @@
-"""
-Диалоговые окна для FTP клиента
-"""
-
 import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import Callable, Dict, List, Tuple
@@ -9,15 +5,13 @@ from datetime import datetime
 
 
 class QuickConnectDialog:
-    """Диалог быстрого подключения"""
     def __init__(self, parent, callback: Callable):
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Быстрое подключение")
-        self.dialog.geometry("300x200")
+        self.dialog.geometry("350x200")
         self.dialog.transient(parent)
         self.dialog.grab_set()
 
-        # Центрируем окно
         self.dialog.geometry("+%d+%d" % (
             parent.winfo_rootx() + parent.winfo_width()//2 - 150,
             parent.winfo_rooty() + parent.winfo_height()//2 - 100
@@ -26,12 +20,11 @@ class QuickConnectDialog:
         frame = ttk.Frame(self.dialog, padding="10")
         frame.pack(fill=tk.BOTH, expand=True)
 
-        # Поля ввода
         entries = {}
         fields = [
             ("host", "Сервер:", "localhost"),
             ("port", "Порт:", "21"),
-            ("user", "Пользователь:", "anonymous"),
+            ("user", "Пользователь:", "user"),
             ("password", "Пароль:", "")
         ]
 
@@ -44,7 +37,6 @@ class QuickConnectDialog:
                 entry.configure(show="*")
             entries[field] = entry
 
-        # Кнопки
         btn_frame = ttk.Frame(frame)
         btn_frame.grid(row=len(fields), column=0, columnspan=2, pady=10)
 
@@ -55,7 +47,6 @@ class QuickConnectDialog:
                   command=self.dialog.destroy).pack(side=tk.LEFT, padx=5)
 
     def _connect(self, callback: Callable, entries: Dict[str, ttk.Entry]):
-        """Обработка подключения"""
         try:
             host = entries["host"].get()
             port = int(entries["port"].get())
@@ -69,7 +60,6 @@ class QuickConnectDialog:
 
 
 class HistoryDialog:
-    """Диалог истории подключений"""
     def __init__(self, parent, history: List[Dict], callback: Callable):
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("История подключений")
@@ -77,7 +67,6 @@ class HistoryDialog:
         self.dialog.transient(parent)
         self.dialog.grab_set()
 
-        # Создаем Treeview
         tree = ttk.Treeview(self.dialog, 
                            columns=("host", "port", "user", "date"),
                            show="headings")
@@ -87,13 +76,11 @@ class HistoryDialog:
         tree.heading("user", text="Пользователь")
         tree.heading("date", text="Дата")
 
-        # Устанавливаем ширину колонок
         tree.column("host", width=250)
         tree.column("port", width=100)
         tree.column("user", width=200)
         tree.column("date", width=200)
 
-        # Заполняем данными
         for conn in history:
             date = datetime.fromisoformat(conn['timestamp']).strftime("%Y-%m-%d %H:%M")
             tree.insert("", tk.END, values=(
@@ -107,7 +94,6 @@ class HistoryDialog:
         tree.pack(fill=tk.BOTH, expand=True)
 
     def _connect(self, callback: Callable, tree: ttk.Treeview):
-        """Подключение из истории"""
         selected = tree.selection()
         if not selected:
             return
@@ -120,16 +106,14 @@ class HistoryDialog:
 
 
 class BookmarksDialog:
-    """Диалог закладок"""
     def __init__(self, parent, bookmarks: List[Dict], 
                  connect_callback: Callable, delete_callback: Callable):
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Закладки")
-        self.dialog.geometry("800x300")
+        self.dialog.geometry("800x350")
         self.dialog.transient(parent)
         self.dialog.grab_set()
 
-        # Создаем Treeview
         tree = ttk.Treeview(self.dialog, 
                            columns=("name", "host", "port", "user"),
                            show="headings")
@@ -138,14 +122,11 @@ class BookmarksDialog:
         tree.heading("host", text="Сервер")
         tree.heading("port", text="Порт")
         tree.heading("user", text="Пользователь")
-
-        # Устанавливаем ширину колонок
         tree.column("name", width=200)
         tree.column("host", width=250)
         tree.column("port", width=100)
         tree.column("user", width=200)
 
-        # Заполняем данными
         for bookmark in bookmarks:
             tree.insert("", tk.END, values=(
                 bookmark['name'],
@@ -156,7 +137,6 @@ class BookmarksDialog:
 
         tree.pack(fill=tk.BOTH, expand=True)
 
-        # Кнопки
         btn_frame = ttk.Frame(self.dialog)
         btn_frame.pack(fill=tk.X, padx=5, pady=5)
         
@@ -166,7 +146,6 @@ class BookmarksDialog:
                   command=lambda: self._delete(delete_callback, tree)).pack(side=tk.LEFT, padx=2)
 
     def _connect(self, callback: Callable, tree: ttk.Treeview):
-        """Подключение из закладки"""
         selected = tree.selection()
         if not selected:
             return
@@ -178,7 +157,6 @@ class BookmarksDialog:
         callback(values)
 
     def _delete(self, callback: Callable, tree: ttk.Treeview):
-        """Удаление закладки"""
         selected = tree.selection()
         if not selected:
             return
@@ -191,7 +169,6 @@ class BookmarksDialog:
 
 
 class SettingsDialog:
-    """Диалог настроек"""
     def __init__(self, parent, settings: Dict, callback: Callable):
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Настройки")
@@ -199,19 +176,15 @@ class SettingsDialog:
         self.dialog.transient(parent)
         self.dialog.grab_set()
 
-        # Создаем notebook для вкладок
         notebook = ttk.Notebook(self.dialog)
         notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Вкладка общих настроек
         general_frame = ttk.Frame(notebook)
         notebook.add(general_frame, text="Общие")
 
-        # Настройки интерфейса
         interface_frame = ttk.LabelFrame(general_frame, text="Интерфейс")
         interface_frame.pack(fill=tk.X, padx=5, pady=5)
 
-        # Переменные для настроек
         self.show_hidden = tk.BooleanVar(value=settings.get('show_hidden_files', False))
         self.sort_folders = tk.BooleanVar(value=settings.get('sort_folders_first', True))
         self.confirm_delete = tk.BooleanVar(value=settings.get('confirm_delete', True))
@@ -226,7 +199,6 @@ class SettingsDialog:
         ttk.Checkbutton(interface_frame, text="Подтверждать перезапись",
                        variable=self.confirm_overwrite).pack(anchor="w", padx=5, pady=2)
 
-        # Кнопки
         btn_frame = ttk.Frame(self.dialog)
         btn_frame.pack(fill=tk.X, padx=5, pady=5)
 
@@ -236,7 +208,6 @@ class SettingsDialog:
                   command=self.dialog.destroy).pack(side=tk.RIGHT, padx=5)
 
     def _save(self, callback: Callable):
-        """Сохранение настроек"""
         settings = {
             'show_hidden_files': self.show_hidden.get(),
             'sort_folders_first': self.sort_folders.get(),
@@ -248,7 +219,6 @@ class SettingsDialog:
 
 
 class AboutDialog:
-    """Диалог 'О программе'"""
     def __init__(self, parent):
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("О программе")
@@ -256,7 +226,6 @@ class AboutDialog:
         self.dialog.transient(parent)
         self.dialog.grab_set()
 
-        # Центрируем окно
         self.dialog.geometry("+%d+%d" % (
             parent.winfo_rootx() + parent.winfo_width()//2 - 200,
             parent.winfo_rooty() + parent.winfo_height()//2 - 150
@@ -271,7 +240,7 @@ class AboutDialog:
         ttk.Label(frame, text="Версия 1.0", 
                  font=('Helvetica', 10)).pack()
         
-        ttk.Label(frame, text="\n© 2024 Все права защищены\n", 
+        ttk.Label(frame, text="\n© 2025 Все права защищены\n",
                  font=('Helvetica', 9)).pack()
         
         ttk.Label(frame, text="Программа для работы с FTP-серверами\n" +

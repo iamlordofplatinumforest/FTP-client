@@ -11,6 +11,13 @@ import humanize
 import time
 from queue import Queue
 import socket
+import sys
+
+
+def debug_log(message: str):
+    """Принудительный вывод отладочной информации"""
+    sys.stderr.write(f"{message}\n")
+    sys.stderr.flush()
 
 
 class FTPClient:
@@ -55,15 +62,20 @@ class FTPClient:
 
     def disconnect(self) -> None:
         """Отключение от сервера"""
+        debug_log("\nDEBUG: FTPClient: Начало отключения")
         self.monitor_running = False
+        
         with self.ftp_lock:
             if self.ftp:
                 try:
+                    debug_log("DEBUG: FTPClient: Отправляем команду QUIT")
                     self.ftp.quit()
-                except:
-                    pass
+                except Exception as e:
+                    debug_log(f"DEBUG: FTPClient: Ошибка при отправке QUIT: {str(e)}")
                 finally:
+                    debug_log("DEBUG: FTPClient: Очищаем объект FTP")
                     self.ftp = None
+                    debug_log("DEBUG: FTPClient: Отключение завершено")
 
     def list_files(self) -> List[Tuple[str, str, str, str]]:
         """Получение списка файлов в текущей директории"""
@@ -240,25 +252,112 @@ class FTPClient:
         if not self.ftp:
             return False, "Нет подключения"
 
+        debug_log(f"\nDEBUG: Начало удаления элемента: {name}")
         try:
             with self.ftp_lock:
                 # Проверяем, это файл или директория
                 is_dir = False
                 try:
+                    debug_log(f"DEBUG: Проверяем, является ли {name} директорией")
                     self.ftp.cwd(name)
                     is_dir = True
                     self.ftp.cwd('..')
+                    debug_log(f"DEBUG: {name} является директорией")
                 except:
+                    debug_log(f"DEBUG: {name} является файлом")
                     pass
 
                 if is_dir:
-                    self.ftp.rmd(name)
+                    debug_log(f"DEBUG: Начинаем удаление директории {name}")
+                    # Сохраняем текущую директорию
+                    current_dir = self.ftp.pwd()
+                    debug_log(f"DEBUG: Текущая директория: {current_dir}")
+                    
+                    try:
+                        # Переходим в удаляемую директорию
+                        debug_log(f"DEBUG: Переходим в директорию {name}")
+                        self.ftp.cwd(name)
+                        
+                        # Получаем список файлов
+                        files = []
+                        debug_log("DEBUG: Получаем список файлов")
+                        self.ftp.retrlines('LIST', lambda x: (files.append(x), debug_log(f"DEBUG: Найден элемент: {x}")))
+                        
+                        # Сначала собираем все файлы и папки
+                        all_files = []
+                        all_dirs = []
+                        
+                        # Обрабатываем каждый элемент
+                        for item in files:
+                            parts = item.split(None, 8)
+                            if len(parts) < 9:
+                                debug_log(f"DEBUG: Пропускаем некорректный элемент: {item}")
+                                continue
+                                
+                            filename = parts[8]
+                            if filename in ('.', '..'):
+                                debug_log(f"DEBUG: Пропускаем специальный элемент: {filename}")
+                                continue
+                                
+                            if parts[0].startswith('d'):
+                                debug_log(f"DEBUG: Добавляем директорию в список: {filename}")
+                                all_dirs.append(filename)
+                            else:
+                                debug_log(f"DEBUG: Добавляем файл в список: {filename}")
+                                all_files.append(filename)
+                        
+                        # Сначала удаляем все файлы
+                        debug_log("DEBUG: Удаляем файлы")
+                        for file in all_files:
+                            try:
+                                debug_log(f"DEBUG: Удаляем файл: {file}")
+                                self.ftp.delete(file)
+                                debug_log(f"DEBUG: Файл {file} успешно удален")
+                            except Exception as e:
+                                debug_log(f"DEBUG: Ошибка при удалении файла {file}: {str(e)}")
+                                raise
+                        
+                        # Возвращаемся в родительскую директорию
+                        debug_log(f"DEBUG: Возвращаемся в директорию {current_dir}")
+                        self.ftp.cwd(current_dir)
+                        
+                        # Рекурсивно удаляем поддиректории
+                        debug_log("DEBUG: Удаляем поддиректории")
+                        for dir_name in all_dirs:
+                            try:
+                                debug_log(f"DEBUG: Рекурсивно удаляем директорию: {dir_name}")
+                                success, message = self.delete_item(dir_name)
+                                if not success:
+                                    debug_log(f"DEBUG: Ошибка при удалении директории {dir_name}: {message}")
+                                    raise Exception(message)
+                            except Exception as e:
+                                debug_log(f"DEBUG: Ошибка при рекурсивном удалении {dir_name}: {str(e)}")
+                                raise
+                        
+                        # Удаляем саму папку
+                        debug_log(f"DEBUG: Удаляем саму папку {name}")
+                        try:
+                            self.ftp.rmd(name)
+                            debug_log(f"DEBUG: Папка {name} успешно удалена")
+                        except Exception as e:
+                            debug_log(f"DEBUG: Ошибка при удалении папки {name}: {str(e)}")
+                            raise
+                    except Exception as e:
+                        # В случае ошибки возвращаемся в исходную директорию
+                        debug_log(f"DEBUG: Ошибка, возвращаемся в {current_dir}")
+                        self.ftp.cwd(current_dir)
+                        raise e
                 else:
+                    debug_log(f"DEBUG: Удаляем файл {name}")
                     self.ftp.delete(name)
+                    debug_log(f"DEBUG: Файл {name} успешно удален")
 
+                debug_log("DEBUG: Операция удаления завершена успешно")
                 return True, "Успешно удалено"
         except Exception as e:
-            return False, str(e)
+            error_msg = str(e)
+            debug_log(f"DEBUG: Ошибка удаления: {error_msg}")
+            return False, error_msg
 
     def rename_item(self, old_name: str, new_name: str) -> Tuple[bool, str]:
         """Переименование файла или папки"""

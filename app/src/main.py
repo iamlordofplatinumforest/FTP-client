@@ -17,6 +17,7 @@ import json
 import re
 from typing import Dict, List, Tuple
 import base64
+import sys
 
 from src.core.ftp_client import FTPClient
 from src.core.settings import Settings
@@ -27,12 +28,18 @@ from src.utils.helpers import filter_hidden_files, sort_items
 from src.gui.styles import setup_styles
 
 
+def debug_log(message: str):
+    """Принудительный вывод отладочной информации"""
+    sys.stderr.write(f"{message}\n")
+    sys.stderr.flush()
+
+
 class Application(tk.Tk):
     def __init__(self):
         super().__init__()
 
         self.title("FTP Client")
-        self.geometry("1400x750")
+        self.geometry("1400x800")
 
         # Инициализация компонентов
         self.settings = Settings()
@@ -312,12 +319,31 @@ class Application(tk.Tk):
 
     def _disconnect(self):
         """Отключение от сервера"""
-        self.ftp_client.disconnect()
-        self.connection_panel.set_connected_state(False)
-        self.connection_menu.entryconfig("Отключиться", state="disabled")
-        self.remote_files.set_items([])
-        self.remote_path.set_path("")
-        self.status_bar.set_status("Отключено от сервера")
+        debug_log("\nDEBUG: Начало отключения от сервера")
+        
+        try:
+            debug_log("DEBUG: Вызываем disconnect у FTP клиента")
+            self.ftp_client.disconnect()
+            
+            debug_log("DEBUG: Обновляем состояние панели подключения")
+            self.connection_panel.set_connected_state(False)
+            
+            debug_log("DEBUG: Деактивируем пункт меню Отключиться")
+            self.connection_menu.entryconfig("Отключиться", state="disabled")
+            
+            debug_log("DEBUG: Очищаем список удаленных файлов")
+            self.remote_files.delete(*self.remote_files.get_children())
+            
+            debug_log("DEBUG: Очищаем путь")
+            self.remote_path.set_path("")
+            
+            debug_log("DEBUG: Обновляем статус")
+            self.status_bar.set_status("Отключено от сервера")
+            
+            debug_log("DEBUG: Отключение завершено успешно")
+        except Exception as e:
+            debug_log(f"DEBUG: Ошибка при отключении: {str(e)}")
+            self.status_bar.set_status(f"Ошибка при отключении: {str(e)}", error=True)
 
     def _on_connection_lost(self):
         """Обработка потери соединения"""
@@ -594,8 +620,122 @@ class Application(tk.Tk):
 
     def _show_settings(self):
         """Показ окна настроек"""
-        dialog = SettingsDialog(self, self.settings.current_settings, self._save_settings)
-        self.wait_window(dialog)
+        settings_window = tk.Toplevel(self)
+        settings_window.title("Настройки")
+        settings_window.geometry("600x500")
+        settings_window.transient(self)
+        settings_window.grab_set()
+
+        # Создаем notebook для вкладок
+        notebook = ttk.Notebook(settings_window)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # Вкладка общих настроек
+        general_frame = ttk.Frame(notebook)
+        notebook.add(general_frame, text="Общие")
+
+        # Локальная директория по умолчанию
+        dir_frame = ttk.LabelFrame(general_frame, text="Директории")
+        dir_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        ttk.Label(dir_frame, text="Локальная директория:").pack(anchor="w", padx=5, pady=2)
+        local_dir_frame = ttk.Frame(dir_frame)
+        local_dir_frame.pack(fill=tk.X, padx=5, pady=2)
+        
+        local_dir_entry = ttk.Entry(local_dir_frame)
+        local_dir_entry.insert(0, self.settings.get('default_local_dir'))
+        local_dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        def choose_directory():
+            directory = filedialog.askdirectory(initialdir=local_dir_entry.get())
+            if directory:
+                local_dir_entry.delete(0, tk.END)
+                local_dir_entry.insert(0, directory)
+                
+        ttk.Button(local_dir_frame, text="Обзор", 
+                  command=choose_directory).pack(side=tk.LEFT, padx=2)
+
+        # Настройки подключения
+        connection_frame = ttk.LabelFrame(general_frame, text="Подключение")
+        connection_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        auto_reconnect_var = tk.BooleanVar(value=self.settings.get('auto_reconnect', True))
+        ttk.Checkbutton(connection_frame, text="Автоматическое переподключение",
+                       variable=auto_reconnect_var).pack(anchor="w", padx=5, pady=2)
+
+        reconnect_frame = ttk.Frame(connection_frame)
+        reconnect_frame.pack(fill=tk.X, padx=5, pady=2)
+        ttk.Label(reconnect_frame, text="Количество попыток:").pack(side=tk.LEFT)
+        reconnect_attempts = ttk.Spinbox(reconnect_frame, from_=1, to=10, width=5)
+        reconnect_attempts.set(self.settings.get('reconnect_attempts', 3))
+        reconnect_attempts.pack(side=tk.LEFT, padx=5)
+
+        # Настройки интерфейса
+        interface_frame = ttk.LabelFrame(general_frame, text="Интерфейс")
+        interface_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        sort_folders_var = tk.BooleanVar(value=self.settings.get('sort_folders_first', True))
+        ttk.Checkbutton(interface_frame, text="Показывать папки первыми",
+                       variable=sort_folders_var).pack(anchor="w", padx=5, pady=2)
+
+        show_hidden_var = tk.BooleanVar(value=self.settings.get('show_hidden_files', False))
+        ttk.Checkbutton(interface_frame, text="Показывать скрытые файлы",
+                       variable=show_hidden_var).pack(anchor="w", padx=5, pady=2)
+
+        # Вкладка подтверждений
+        confirm_frame = ttk.Frame(notebook)
+        notebook.add(confirm_frame, text="Подтверждения")
+
+        confirm_delete_var = tk.BooleanVar(value=self.settings.get('confirm_delete', True))
+        ttk.Checkbutton(confirm_frame, text="Подтверждать удаление",
+                       variable=confirm_delete_var).pack(anchor="w", padx=5, pady=2)
+
+        confirm_overwrite_var = tk.BooleanVar(value=self.settings.get('confirm_overwrite', True))
+        ttk.Checkbutton(confirm_frame, text="Подтверждать перезапись",
+                       variable=confirm_overwrite_var).pack(anchor="w", padx=5, pady=2)
+
+        # Вкладка производительности
+        performance_frame = ttk.Frame(notebook)
+        notebook.add(performance_frame, text="Производительность")
+
+        ttk.Label(performance_frame, text="Размер буфера (байт):").pack(anchor="w", padx=5, pady=2)
+        buffer_size = ttk.Entry(performance_frame)
+        buffer_size.insert(0, str(self.settings.get('buffer_size', 8192)))
+        buffer_size.pack(anchor="w", padx=5, pady=2)
+
+        ttk.Label(performance_frame, text="Время жизни кэша (сек):").pack(anchor="w", padx=5, pady=2)
+        cache_ttl = ttk.Entry(performance_frame)
+        cache_ttl.insert(0, str(self.settings.get('cache_ttl', 30)))
+        cache_ttl.pack(anchor="w", padx=5, pady=2)
+
+        # Кнопки
+        btn_frame = ttk.Frame(settings_window)
+        btn_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        def save_settings():
+            try:
+                new_settings = {
+                    'default_local_dir': local_dir_entry.get(),
+                    'buffer_size': int(buffer_size.get()),
+                    'auto_reconnect': auto_reconnect_var.get(),
+                    'reconnect_attempts': int(reconnect_attempts.get()),
+                    'cache_ttl': int(cache_ttl.get()),
+                    'show_hidden_files': show_hidden_var.get(),
+                    'confirm_delete': confirm_delete_var.get(),
+                    'confirm_overwrite': confirm_overwrite_var.get(),
+                    'sort_folders_first': sort_folders_var.get(),
+                    'date_format': self.settings.get('date_format', "%Y-%m-%d %H:%M")
+                }
+                self._save_settings(new_settings)
+                settings_window.destroy()
+            except ValueError as e:
+                messagebox.showerror("Ошибка", "Проверьте правильность введенных числовых значений")
+
+        ttk.Button(btn_frame, text="Сохранить", 
+                  command=save_settings).pack(side=tk.RIGHT, padx=5)
+
+        ttk.Button(btn_frame, text="Отмена",
+                  command=settings_window.destroy).pack(side=tk.RIGHT, padx=5)
 
     def _save_settings(self, new_settings: Dict):
         """Сохранение настроек"""
@@ -933,8 +1073,45 @@ class Application(tk.Tk):
         # TODO: Реализовать переименование
 
     def _delete_remote(self):
-        """Удаление удаленного файла"""
-        # TODO: Реализовать удаление
+        """Удаление файла/папки на сервере"""
+        debug_log("\nDEBUG: Начало функции _delete_remote")
+        
+        if not self.ftp_client.ftp:
+            debug_log("DEBUG: FTP клиент не подключен")
+            messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
+            return
+
+        selected = self.remote_files.selection()
+        if not selected:
+            debug_log("DEBUG: Не выбраны элементы для удаления")
+            messagebox.showwarning("Ошибка", "Выберите файл для удаления")
+            return
+
+        filename = self.remote_files.item(selected[0], 'values')[0]
+        is_dir = self.remote_files.item(selected[0], 'values')[2] == "Папка"
+
+        debug_log(f"DEBUG: Выбран для удаления: {filename} ({'папка' if is_dir else 'файл'})")
+
+        if not self.settings.get('confirm_delete', True) or \
+           messagebox.askyesno("Подтверждение", f"Удалить {filename}?"):
+            try:
+                debug_log(f"DEBUG: Вызываем метод delete_item для {filename}")
+                success, message = self.ftp_client.delete_item(filename)
+                debug_log(f"DEBUG: Результат удаления: success={success}, message={message}")
+                
+                if success:
+                    debug_log("DEBUG: Удаление успешно, обновляем список файлов")
+                    self._refresh_remote_list()
+                    self.status_bar.set_status(f"Удален: {filename}")
+                else:
+                    debug_log(f"DEBUG: Ошибка удаления: {message}")
+                    messagebox.showerror("Ошибка", f"Ошибка удаления: {message}")
+                    self.status_bar.set_status(f"Ошибка удаления: {message}", error=True)
+            except Exception as e:
+                error_msg = str(e)
+                debug_log(f"DEBUG: Исключение при удалении: {error_msg}")
+                messagebox.showerror("Ошибка", f"Ошибка удаления: {error_msg}")
+                self.status_bar.set_status(f"Ошибка удаления: {error_msg}", error=True)
 
     def _create_remote_dir(self):
         """Создание удаленной папки"""
