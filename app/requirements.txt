@@ -1,0 +1,2 @@
+humanize==4.9.0
+cryptography==42.0.5 

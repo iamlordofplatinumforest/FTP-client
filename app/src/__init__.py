@@ -1,5 +1,5 @@
 """
-FTP Client Application
+FTP Client Application Package
 """
 
 __version__ = '1.0.0' 

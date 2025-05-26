@@ -1,5 +1,5 @@
 """
-Модуль для работы с настройками приложения
+Модуль управления настройками приложения
 """
 
 import os
@@ -9,56 +9,56 @@ from typing import Dict, Any
 
 class Settings:
     def __init__(self):
-        self.settings_file = os.path.join(os.path.expanduser("~"), ".ftp_client_settings.json")
+        self.settings_file = os.path.join(
+            os.path.expanduser("~"), ".ftp_client_settings.json")
         self.default_settings = {
-            'default_local_dir': os.path.expanduser("~/Downloads"),
-            'buffer_size': 8192,
-            'auto_reconnect': True,
-            'reconnect_attempts': 3,
-            'cache_ttl': 30,
+            'default_local_dir': os.path.expanduser("~"),
             'show_hidden_files': False,
+            'sort_folders_first': True,
             'confirm_delete': True,
             'confirm_overwrite': True,
-            'dark_mode': False,
-            'sort_folders_first': True,
-            'date_format': "%Y-%m-%d %H:%M"
+            'buffer_size': 8192,
+            'encoding': 'utf-8',
+            'date_format': '%Y-%m-%d %H:%M:%S',
+            'theme': 'default'
         }
-        self.current_settings = self.default_settings.copy()
-        self.load_settings()
+        self.current_settings = self.load_settings()
 
-    def load_settings(self) -> None:
+    def load_settings(self) -> Dict[str, Any]:
         """Загрузка настроек из файла"""
         try:
             if os.path.exists(self.settings_file):
                 with open(self.settings_file, 'r') as f:
                     saved_settings = json.load(f)
-                    self.current_settings.update(saved_settings)
+                    # Обновляем дефолтные настройки сохраненными
+                    settings = self.default_settings.copy()
+                    settings.update(saved_settings)
+                    return settings
         except Exception as e:
             print(f"Ошибка загрузки настроек: {e}")
+        return self.default_settings.copy()
 
-    def save_settings(self) -> bool:
+    def save_settings(self):
         """Сохранение настроек в файл"""
         try:
             with open(self.settings_file, 'w') as f:
-                json.dump(self.current_settings, f)
-            return True
+                json.dump(self.current_settings, f, indent=4)
         except Exception as e:
             print(f"Ошибка сохранения настроек: {e}")
-            return False
 
     def get(self, key: str, default: Any = None) -> Any:
         """Получение значения настройки"""
         return self.current_settings.get(key, default)
 
-    def set(self, key: str, value: Any) -> None:
+    def set(self, key: str, value: Any):
         """Установка значения настройки"""
         self.current_settings[key] = value
 
-    def update(self, settings: Dict[str, Any]) -> None:
+    def update(self, settings: Dict[str, Any]):
         """Обновление нескольких настроек"""
         self.current_settings.update(settings)
 
-    def reset(self) -> None:
+    def reset(self):
         """Сброс настроек на значения по умолчанию"""
         self.current_settings = self.default_settings.copy()
         self.save_settings() 
