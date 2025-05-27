@@ -304,6 +304,11 @@ class Application(tk.Tk):
 
     def _connect(self, host: str, port: int, user: str, password: str):
         """Подключение к серверу"""
+        # Если все параметры None - это сигнал на отключение
+        if host is None and port is None and user is None and password is None:
+            self._disconnect()
+            return
+
         success, message = self.ftp_client.connect(host, port, user, password)
         if success:
             self.status_bar.set_status("Подключено к серверу")

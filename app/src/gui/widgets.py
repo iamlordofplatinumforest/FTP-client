@@ -142,7 +142,7 @@ class ConnectionPanel(ttk.LabelFrame):
         
         # Кнопка подключения
         self.connect_btn = ttk.Button(self, text="Подключиться",
-                                    command=self._on_connect,
+                                    command=self._on_button_click,
                                     style="Primary.TButton")
         self.connect_btn.grid(row=4, column=0, columnspan=2, pady=5)
         
@@ -150,16 +150,23 @@ class ConnectionPanel(ttk.LabelFrame):
         self.columnconfigure(1, weight=1)
         
         self._on_connect_callback = on_connect
+        self._is_connected = False
 
-    def _on_connect(self) -> None:
-        """Обработка нажатия кнопки подключения"""
-        if self._on_connect_callback:
-            self._on_connect_callback(
-                self.entries["host"].get(),
-                int(self.entries["port"].get()),
-                self.entries["user"].get(),
-                self.password_entry.get()
-            )
+    def _on_button_click(self) -> None:
+        """Обработка нажатия кнопки подключения/отключения"""
+        if self._is_connected:
+            # Если подключены - отключаемся
+            if self._on_connect_callback:
+                self._on_connect_callback(None, None, None, None)
+        else:
+            # Если не подключены - подключаемся
+            if self._on_connect_callback:
+                self._on_connect_callback(
+                    self.entries["host"].get(),
+                    int(self.entries["port"].get()),
+                    self.entries["user"].get(),
+                    self.password_entry.get()
+                )
 
     def _toggle_password_visibility(self) -> None:
         """Переключение видимости пароля"""
@@ -172,6 +179,7 @@ class ConnectionPanel(ttk.LabelFrame):
 
     def set_connected_state(self, connected: bool) -> None:
         """Установка состояния подключения"""
+        self._is_connected = connected
         if connected:
             self.connect_btn.configure(text="Отключиться")
             for entry in self.entries.values():
