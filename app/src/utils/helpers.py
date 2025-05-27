@@ -74,11 +74,11 @@ def sort_items(items: List[Dict[str, Any]], folders_first: bool = True) -> List[
     if folders_first:
         # Сначала сортируем папки, потом файлы
         folders = sorted(
-            [item for item in items if item['type'] == 'Папка'],
+            [item for item in items if item['type'] == "Папка"],
             key=lambda x: x['name'].lower()
         )
         files = sorted(
-            [item for item in items if item['type'] == 'Файл'],
+            [item for item in items if item['type'] == "Файл"],
             key=lambda x: x['name'].lower()
         )
         return folders + files

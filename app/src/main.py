@@ -796,6 +796,18 @@ class Application(tk.Tk):
                 is_dir = values[2] == "Папка"
                 local_path = os.path.join(self.settings.get('default_local_dir'), filename)
 
+                # Проверяем существование файла на сервере
+                if not is_dir:
+                    try:
+                        self.ftp_client.ftp.size(filename)
+                        # Файл существует, спрашиваем подтверждение
+                        if self.settings.get('confirm_overwrite', True):
+                            if not messagebox.askyesno("Подтверждение", 
+                                                     f"Файл {filename} уже существует. Перезаписать?"):
+                                continue
+                    except:
+                        pass  # Файл не существует, можно загружать
+
                 if is_dir:
                     # Сохраняем текущую удаленную директорию
                     initial_remote_dir = self.ftp_client.ftp.pwd()
@@ -828,6 +840,17 @@ class Application(tk.Tk):
                             # Загружаем все файлы в текущей папке
                             for file in files:
                                 local_file = os.path.join(root, file)
+                                # Проверяем существование файла
+                                try:
+                                    self.ftp_client.ftp.size(file)
+                                    # Файл существует, спрашиваем подтверждение
+                                    if self.settings.get('confirm_overwrite', True):
+                                        if not messagebox.askyesno("Подтверждение", 
+                                                                 f"Файл {file} уже существует. Перезаписать?"):
+                                            continue
+                                except:
+                                    pass  # Файл не существует, можно загружать
+
                                 with open(local_file, 'rb') as f:
                                     self.ftp_client.ftp.storbinary(f'STOR {file}', f)
                                     
@@ -883,6 +906,13 @@ class Application(tk.Tk):
                 is_dir = values[2] == "Папка"
                 local_path = os.path.join(self.settings.get('default_local_dir'), filename)
 
+                # Проверяем существование локального файла
+                if os.path.exists(local_path):
+                    if self.settings.get('confirm_overwrite', True):
+                        if not messagebox.askyesno("Подтверждение", 
+                                                 f"Файл {filename} уже существует. Перезаписать?"):
+                            continue
+
                 if is_dir:
                     # Создаем локальную папку
                     os.makedirs(local_path, exist_ok=True)
@@ -898,8 +928,15 @@ class Application(tk.Tk):
                         for item in self.ftp_client.list_files():
                             name, _, type_, _ = item
                             if type_ == "Файл":
-                                # Скачиваем файл
+                                # Проверяем существование локального файла
                                 local_file = os.path.join(local_path, name)
+                                if os.path.exists(local_file):
+                                    if self.settings.get('confirm_overwrite', True):
+                                        if not messagebox.askyesno("Подтверждение", 
+                                                                 f"Файл {name} уже существует. Перезаписать?"):
+                                            continue
+
+                                # Скачиваем файл
                                 with open(local_file, 'wb') as f:
                                     self.ftp_client.ftp.retrbinary(f'RETR {name}', f.write)
                     finally:
@@ -929,9 +966,11 @@ class Application(tk.Tk):
             if not selected:
                 return
 
-            if not messagebox.askyesno("Подтверждение", 
-                                     "Удалить {} выбранных элементов?".format(len(selected))):
-                return
+            # Проверяем настройку подтверждения удаления
+            if self.settings.get('confirm_delete', True):
+                if not messagebox.askyesno("Подтверждение", 
+                                         "Удалить {} выбранных элементов?".format(len(selected))):
+                    return
 
             try:
                 for item_id in selected:
@@ -957,9 +996,11 @@ class Application(tk.Tk):
             if not selected:
                 return
 
-            if not messagebox.askyesno("Подтверждение", 
-                                     "Удалить {} выбранных элементов?".format(len(selected))):
-                return
+            # Проверяем настройку подтверждения удаления
+            if self.settings.get('confirm_delete', True):
+                if not messagebox.askyesno("Подтверждение", 
+                                         "Удалить {} выбранных элементов?".format(len(selected))):
+                    return
 
             try:
                 for item_id in selected:

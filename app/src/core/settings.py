@@ -20,7 +20,10 @@ class Settings:
             'buffer_size': 8192,
             'encoding': 'utf-8',
             'date_format': '%Y-%m-%d %H:%M:%S',
-            'theme': 'default'
+            'theme': 'default',
+            'auto_reconnect': True,
+            'reconnect_attempts': 3,
+            'cache_ttl': 30
         }
         self.current_settings = self.load_settings()
 

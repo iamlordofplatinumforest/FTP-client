@@ -5,13 +5,14 @@ FTP клиент - основной класс для работы с FTP-сое
 from ftplib import FTP, FTP_TLS, error_perm
 import os
 from threading import Lock
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List, Dict, Any, Callable
 from datetime import datetime
 import humanize
 import time
 from queue import Queue
 import socket
 import sys
+from src.core.settings import Settings
 
 
 def debug_log(message: str):
@@ -22,43 +23,46 @@ def debug_log(message: str):
 
 class FTPClient:
     def __init__(self):
-        self.ftp: Optional[FTP] = None
+        self.ftp = None
         self.ftp_lock = Lock()
+        self.monitor_thread = None
+        self.stop_monitor = False
+        self.settings = Settings()
         self.current_remote_dir = "/"
+        self.connection_params = None
         self.monitor_running = False
         self.remote_cache = {}
         
     def connect(self, host: str, port: int, user: str, password: str) -> Tuple[bool, str]:
-        """Подключение к FTP серверу"""
+        """Подключение к серверу"""
         try:
-            # Проверка доступности сервера
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(3)
-            result = sock.connect_ex((host, port))
-            sock.close()
-            if result != 0:
-                return False, f"Сервер {host}:{port} недоступен"
-
             with self.ftp_lock:
                 if self.ftp:
-                    try:
-                        self.ftp.quit()
-                    except:
-                        pass
-
-                try:
-                    self.ftp = FTP()
-                    self.ftp.connect(host, port, timeout=10)
-                    self.ftp.login(user=user, passwd=password)
-                    self.monitor_running = True
-                    return True, "Подключено успешно"
-                except Exception as ftp_error:
-                    if "530" in str(ftp_error):  # Ошибка аутентификации
-                        return False, f"Ошибка аутентификации: неверное имя пользователя или пароль для {user}@{host}"
-                    else:
-                        return False, f"Ошибка подключения: {str(ftp_error)}"
+                    self.ftp.quit()
+                
+                self.ftp = FTP()
+                self.ftp.connect(host, port)
+                self.ftp.login(user, password)
+                self.ftp.encoding = self.settings.get('encoding', 'utf-8')
+                
+                # Сохраняем параметры подключения для возможного переподключения
+                self.connection_params = {
+                    'host': host,
+                    'port': port,
+                    'user': user,
+                    'password': password
+                }
+                
+                return True, "Успешное подключение"
         except Exception as e:
-            return False, f"Ошибка: {str(e)}"
+            return False, str(e)
+
+    def reconnect(self) -> Tuple[bool, str]:
+        """Попытка переподключения к серверу"""
+        if not self.connection_params:
+            return False, "Нет сохраненных параметров подключения"
+            
+        return self.connect(**self.connection_params)
 
     def disconnect(self) -> None:
         """Отключение от сервера"""
@@ -93,14 +97,14 @@ class FTPClient:
                         parts = line.split()
                         if len(parts) < 9:
                             continue
-                        name = ' '.join(parts[8:])
+                        name = str(' '.join(parts[8:]))  # Преобразуем имя в строку
                         is_dir = parts[0].startswith('d')
                         
                         if not is_dir:
                             try:
                                 size = humanize.naturalsize(int(parts[4]))
                             except:
-                                size = parts[4]
+                                size = str(parts[4])  # Преобразуем размер в строку
                         else:
                             try:
                                 current_dir = self.ftp.pwd()
@@ -122,53 +126,39 @@ class FTPClient:
             pass
         return items
 
-    def download_file(self, remote_file: str, local_path: str, 
+    def download_file(self, remote_file: str, local_path: str,
                      progress_callback=None) -> Tuple[bool, str]:
         """Скачивание файла"""
         if not self.ftp:
             return False, "Нет подключения"
 
         try:
+            file_size = self.ftp.size(remote_file)
+            buffer_size = self.settings.get('buffer_size', 8192)
+            
             with self.ftp_lock:
-                try:
-                    file_size = self.ftp.size(remote_file)
-                except:
-                    file_size = 1024 * 1024
-
-                buffer_size = self._get_optimal_buffer_size(file_size)
-                self.ftp.voidcmd('TYPE I')
-
-                temp_path = local_path + '.tmp'
-                with open(temp_path, 'wb') as f:
+                with open(local_path, 'wb') as f:
                     bytes_received = 0
                     
-                    def callback(data):
+                    def callback(block):
                         nonlocal bytes_received
-                        f.write(data)
-                        bytes_received += len(data)
+                        bytes_received += len(block)
+                        f.write(block)
                         if progress_callback:
                             progress_callback(bytes_received, file_size)
 
                     self.ftp.retrbinary(f'RETR {remote_file}', callback, buffer_size)
 
-                # Проверяем размер скачанного файла
-                downloaded_size = os.path.getsize(temp_path)
+                downloaded_size = os.path.getsize(local_path)
                 if downloaded_size != file_size:
-                    if os.path.exists(temp_path):
-                        os.remove(temp_path)
+                    os.remove(local_path)
                     return False, "Ошибка скачивания: размер файла не совпадает"
 
-                if os.path.exists(local_path):
-                    os.remove(local_path)
-                os.rename(temp_path, local_path)
                 return True, "Файл успешно скачан"
 
         except Exception as e:
-            if os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except:
-                    pass
+            if os.path.exists(local_path):
+                os.remove(local_path)
             return False, str(e)
 
     def upload_file(self, local_path: str, remote_file: str, 
@@ -179,7 +169,7 @@ class FTPClient:
 
         try:
             file_size = os.path.getsize(local_path)
-            buffer_size = self._get_optimal_buffer_size(file_size)
+            buffer_size = self.settings.get('buffer_size', 8192)
 
             with self.ftp_lock:
                 with open(local_path, 'rb') as f:
@@ -242,7 +232,7 @@ class FTPClient:
 
         try:
             with self.ftp_lock:
-                self.ftp.mkd(dirname)
+                self.ftp.mkd(str(dirname))
                 return True, f"Папка '{dirname}' создана"
         except Exception as e:
             return False, str(e)
@@ -252,6 +242,7 @@ class FTPClient:
         if not self.ftp:
             return False, "Нет подключения"
 
+        name = str(name)
         debug_log(f"\nDEBUG: Начало удаления элемента: {name}")
         try:
             with self.ftp_lock:
@@ -294,7 +285,7 @@ class FTPClient:
                                 debug_log(f"DEBUG: Пропускаем некорректный элемент: {item}")
                                 continue
                                 
-                            filename = parts[8]
+                            filename = str(parts[8])
                             if filename in ('.', '..'):
                                 debug_log(f"DEBUG: Пропускаем специальный элемент: {filename}")
                                 continue
@@ -311,7 +302,7 @@ class FTPClient:
                         for file in all_files:
                             try:
                                 debug_log(f"DEBUG: Удаляем файл: {file}")
-                                self.ftp.delete(file)
+                                self.ftp.delete(str(file))
                                 debug_log(f"DEBUG: Файл {file} успешно удален")
                             except Exception as e:
                                 debug_log(f"DEBUG: Ошибка при удалении файла {file}: {str(e)}")
@@ -326,7 +317,7 @@ class FTPClient:
                         for dir_name in all_dirs:
                             try:
                                 debug_log(f"DEBUG: Рекурсивно удаляем директорию: {dir_name}")
-                                success, message = self.delete_item(dir_name)
+                                success, message = self.delete_item(str(dir_name))
                                 if not success:
                                     debug_log(f"DEBUG: Ошибка при удалении директории {dir_name}: {message}")
                                     raise Exception(message)
@@ -366,7 +357,7 @@ class FTPClient:
 
         try:
             with self.ftp_lock:
-                self.ftp.rename(old_name, new_name)
+                self.ftp.rename(str(old_name), str(new_name))
                 return True, "Успешно переименовано"
         except Exception as e:
             return False, str(e)
@@ -433,38 +424,34 @@ class FTPClient:
         else:  # >= 10MB
             return 65536
 
-    def start_connection_monitor(self, on_connection_lost=None):
+    def start_connection_monitor(self, on_connection_lost: Callable):
         """Запуск мониторинга соединения"""
         def monitor():
-            check_interval = 30
-            consecutive_failures = 0
-            max_interval = 120
-            min_interval = 10
-            
-            while self.monitor_running:
+            while not self.stop_monitor:
                 try:
                     with self.ftp_lock:
                         if self.ftp:
-                            start_time = time.time()
-                            self.ftp.voidcmd('NOOP')
-                            response_time = time.time() - start_time
-                            
-                            if response_time < 0.1:
-                                check_interval = min(check_interval * 1.5, max_interval)
-                            else:
-                                check_interval = max(check_interval * 0.75, min_interval)
-                                
-                            consecutive_failures = 0
-                            
+                            self.ftp.voidcmd("NOOP")
                 except:
-                    consecutive_failures += 1
-                    check_interval = max(check_interval * 0.5, min_interval)
-                    
-                    if consecutive_failures >= 3 and on_connection_lost:
+                    if self.settings.get('auto_reconnect', True):
+                        attempts = self.settings.get('reconnect_attempts', 3)
+                        for _ in range(attempts):
+                            success, _ = self.reconnect()
+                            if success:
+                                break
+                        else:
+                            on_connection_lost()
+                    else:
                         on_connection_lost()
-                        break
-                        
-                time.sleep(check_interval)
+                time.sleep(30)  # Проверяем каждые 30 секунд
 
-        from threading import Thread
-        Thread(target=monitor, daemon=True).start() 
+        self.stop_monitor = False
+        self.monitor_thread = Thread(target=monitor, daemon=True)
+        self.monitor_thread.start()
+
+    def stop_connection_monitor(self):
+        """Остановка мониторинга соединения"""
+        self.stop_monitor = True
+        if self.monitor_thread:
+            self.monitor_thread.join(timeout=1)
+            self.monitor_thread = None 
