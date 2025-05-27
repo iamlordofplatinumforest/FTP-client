@@ -313,7 +313,18 @@ class FTPClient:
 
                 if is_dir:
                     try:
-                        self._remove_directory_recursive(name)
+                        # Проверяем, пуста ли папка
+                        self.ftp.cwd(name)
+                        dir_items = []
+                        self.ftp.retrlines('NLST', dir_items.append)
+                        self.ftp.cwd(current_dir)
+                        
+                        # Если папка не пуста, возвращаем специальный статус
+                        if len(dir_items) > 0:
+                            return False, "NOT_EMPTY_DIR"
+                            
+                        # Если папка пуста, удаляем её
+                        self.ftp.rmd(name)
                         return True, f"Папка '{name}' удалена"
                     except Exception as e:
                         return False, f"Ошибка удаления папки: {str(e)}"
@@ -326,25 +337,49 @@ class FTPClient:
         except Exception as e:
             return False, str(e)
 
-    def _remove_directory_recursive(self, dirname: str):
-        """Рекурсивное удаление директории и всего её содержимого"""
-        current_dir = self.ftp.pwd()
+    def delete_directory_recursive(self, dirname: str) -> Tuple[bool, str]:
+        """Рекурсивное удаление директории со всем содержимым"""
+        if not self.ftp:
+            return False, "Нет подключения"
+
         try:
-            self.ftp.cwd(dirname)
-            items = self._get_file_list()
-            for name, is_dir in items:
-                if is_dir:
-                    self._remove_directory_recursive(name)
-                else:
-                    try:
-                        self.ftp.delete(name)
-                    except Exception as e:
-                        raise Exception(f"Ошибка удаления файла '{name}': {str(e)}")
-            self.ftp.cwd(current_dir)
-            self.ftp.rmd(dirname)
+            with self.ftp_lock:
+                current_dir = self.ftp.pwd()
+                try:
+                    # Переходим в удаляемую директорию
+                    self.ftp.cwd(dirname)
+                    
+                    # Получаем список всех файлов и папок
+                    items = self._get_file_list()
+                    
+                    # Удаляем каждый элемент
+                    for name, is_dir in items:
+                        if is_dir:
+                            # Рекурсивно удаляем поддиректорию
+                            success, message = self.delete_directory_recursive(name)
+                            if not success:
+                                raise Exception(f"Ошибка удаления поддиректории {name}: {message}")
+                        else:
+                            # Удаляем файл
+                            try:
+                                self.ftp.delete(name)
+                            except Exception as e:
+                                raise Exception(f"Ошибка удаления файла {name}: {str(e)}")
+                    
+                    # Возвращаемся в родительскую директорию
+                    self.ftp.cwd(current_dir)
+                    
+                    # Удаляем саму директорию
+                    self.ftp.rmd(dirname)
+                    return True, f"Папка '{dirname}' и её содержимое удалены"
+                    
+                except Exception as e:
+                    # В случае ошибки возвращаемся в исходную директорию
+                    self.ftp.cwd(current_dir)
+                    return False, str(e)
+                    
         except Exception as e:
-            self.ftp.cwd(current_dir)
-            raise Exception(f"Ошибка при удалении директории '{dirname}': {str(e)}")
+            return False, str(e)
 
     def rename_item(self, old_name: str, new_name: str) -> Tuple[bool, str]:
         """Переименование файла или папки"""

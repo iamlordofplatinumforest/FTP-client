@@ -749,33 +749,96 @@ class Application(tk.Tk):
         self._refresh_lists()
 
     def _show_about(self):
-        """Показ окна 'О программе'"""
         AboutDialog(self)
 
     def _create_folder(self):
-        """Создание новой папки"""
-        dirname = simpledialog.askstring("Создать папку", "Введите имя папки:")
-        if not dirname:
-            return
+        dialog = tk.Toplevel(self)
+        dialog.title("Создать папку")
+        dialog.geometry("400x330")
+        dialog.transient(self)
+        dialog.grab_set()
 
-        # Создание локальной папки
-        if self.local_files.focus():
-            try:
-                path = os.path.join(self.settings.get('default_local_dir'), dirname)
-                os.makedirs(path, exist_ok=True)
-                self._refresh_local_list()
-                self.status_bar.set_status(f"Создана папка: {dirname}")
-            except Exception as e:
-                self.status_bar.set_status(f"Ошибка создания папки: {e}", error=True)
+        dialog.geometry("+%d+%d" % (
+            self.winfo_rootx() + self.winfo_width()//2 - 200,
+            self.winfo_rooty() + self.winfo_height()//2 - 125
+        ))
 
-        # Создание удаленной папки
-        elif self.remote_files.focus() and self.ftp_client.ftp:
-            try:
-                self.ftp_client.ftp.mkd(dirname)
-                self._refresh_remote_list()
-                self.status_bar.set_status(f"Создана папка: {dirname}")
-            except Exception as e:
-                self.status_bar.set_status(f"Ошибка создания папки: {e}", error=True)
+        # Основной контейнер с отступами
+        main_frame = ttk.Frame(dialog, padding="20")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Контейнер для поля ввода
+        input_frame = ttk.LabelFrame(main_frame, text="Введите имя папки", padding="10")
+        input_frame.pack(fill=tk.X, padx=5, pady=(0, 15))
+
+        name_entry = ttk.Entry(input_frame, width=40)
+        name_entry.pack(fill=tk.X, padx=5, pady=5)
+        name_entry.focus()
+
+        # Контейнер для радиокнопок
+        radio_frame = ttk.LabelFrame(main_frame, text="Выберите место создания", padding="10")
+        radio_frame.pack(fill=tk.X, padx=5, pady=(0, 15))
+
+        # Переменная для хранения выбора места создания
+        location = tk.StringVar(value="local")
+
+        # Радиокнопки для выбора места
+        ttk.Radiobutton(radio_frame, text="Локально", 
+                       variable=location, value="local").pack(anchor=tk.W, padx=5, pady=2)
+        remote_radio = ttk.Radiobutton(radio_frame, text="На сервере", 
+                                     variable=location, value="remote")
+        remote_radio.pack(anchor=tk.W, padx=5, pady=2)
+        
+        both_radio = ttk.Radiobutton(radio_frame, text="В обоих местах", 
+                                   variable=location, value="both")
+        both_radio.pack(anchor=tk.W, padx=5, pady=2)
+        
+        # Если нет подключения к серверу, делаем недоступными опции с сервером
+        if not self.ftp_client.ftp:
+            remote_radio.configure(state="disabled")
+            both_radio.configure(state="disabled")
+
+        def create():
+            dirname = name_entry.get().strip()
+            if not dirname:
+                messagebox.showwarning("Ошибка", "Введите имя папки")
+                return
+
+            loc = location.get()
+            
+            # Создание локальной папки
+            if loc in ("local", "both"):
+                try:
+                    path = os.path.join(self.settings.get('default_local_dir'), dirname)
+                    os.makedirs(path, exist_ok=True)
+                    self._refresh_local_list()
+                    self.status_bar.set_status(f"Создана локальная папка: {dirname}")
+                except Exception as e:
+                    self.status_bar.set_status(f"Ошибка создания локальной папки: {e}", error=True)
+
+            # Создание удаленной папки
+            if loc in ("remote", "both") and self.ftp_client.ftp:
+                try:
+                    self.ftp_client.ftp.mkd(dirname)
+                    self._refresh_remote_list()
+                    self.status_bar.set_status(f"Создана удаленная папка: {dirname}")
+                except Exception as e:
+                    self.status_bar.set_status(f"Ошибка создания удаленной папки: {e}", error=True)
+
+            dialog.destroy()
+
+        # Контейнер для кнопок
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        # Создаем еще один контейнер для центрирования кнопок
+        center_frame = ttk.Frame(btn_frame)
+        center_frame.pack(anchor=tk.CENTER)
+        
+        ttk.Button(center_frame, text="Создать", 
+                  command=create, width=15).pack(side=tk.LEFT, padx=5)
+        ttk.Button(center_frame, text="Отмена",
+                  command=dialog.destroy, width=15).pack(side=tk.LEFT, padx=5)
 
     def _upload_files(self):
         """Загрузка файлов на сервер"""
