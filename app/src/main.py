@@ -1072,7 +1072,7 @@ class Application(tk.Tk):
         if not values:
             return
 
-        filename = values[0]
+        filename = str(values[0])  # Явное преобразование в строку
         is_dir = values[2] == "Папка"
 
         if is_dir:
