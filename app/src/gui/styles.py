@@ -88,11 +88,28 @@ def setup_styles():
     # Статус бар
     style.configure('Statusbar.TFrame',
                    background='#f0f0f0',
-                   relief='sunken')
+                   relief='sunken',
+                   borderwidth=1)
     
     style.configure('Statusbar.TLabel',
                    background='#f0f0f0',
+                   foreground='black',
+                   font=('Helvetica', 9),
                    padding=(5, 2))
+                   
+    style.configure('StatusbarError.TLabel',
+                   background='#f0f0f0',
+                   foreground='red',
+                   font=('Helvetica', 9, 'bold'),
+                   padding=(5, 2))
+                   
+    # Прогресс бар
+    style.configure("Colored.Horizontal.TProgressbar",
+                   troughcolor='#f0f0f0',
+                   background='#4CAF50',  # Зеленый цвет
+                   bordercolor='#f0f0f0',
+                   lightcolor='#4CAF50',
+                   darkcolor='#4CAF50')
     
     # Панель поиска
     style.configure('Search.TFrame',

@@ -1208,6 +1208,12 @@ class Application(tk.Tk):
                 success, message = self.ftp_client.delete_item(filename)
                 debug_log(f"DEBUG: Результат удаления: success={success}, message={message}")
                 
+                # Если папка не пуста, спрашиваем подтверждение на рекурсивное удаление
+                if not success and message == "NOT_EMPTY_DIR":
+                    if messagebox.askyesno("Подтверждение", 
+                                         f"Папка '{filename}' не пуста. Удалить со всем содержимым?"):
+                        success, message = self.ftp_client.delete_directory_recursive(filename)
+                
                 if success:
                     debug_log("DEBUG: Удаление успешно, обновляем список файлов")
                     self._refresh_remote_list()

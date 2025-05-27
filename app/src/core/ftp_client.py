@@ -295,32 +295,27 @@ class FTPClient:
                 return False, "Пустое имя"
 
             with self.ftp_lock:
+                # Проверяем, является ли элемент директорией
                 current_dir = self.ftp.pwd()
-                # Получаем информацию о элементе
-                is_dir = False
                 try:
-                    items = self._get_file_list()
-                    found = False
-                    for item_name, item_is_dir in items:
-                        if item_name == name:
-                            is_dir = item_is_dir
-                            found = True
-                            break
-                    if not found:
-                        return False, f"Элемент '{name}' не найден"
-                except Exception as e:
-                    return False, f"Ошибка получения информации: {str(e)}"
+                    self.ftp.cwd(name)
+                    is_dir = True
+                    self.ftp.cwd(current_dir)
+                except:
+                    is_dir = False
 
                 if is_dir:
                     try:
-                        # Проверяем, пуста ли папка
+                        # Проверяем содержимое папки
                         self.ftp.cwd(name)
                         dir_items = []
                         self.ftp.retrlines('NLST', dir_items.append)
                         self.ftp.cwd(current_dir)
                         
-                        # Если папка не пуста, возвращаем специальный статус
-                        if len(dir_items) > 0:
+                        # Исключаем . и .. из списка
+                        dir_items = [item for item in dir_items if item not in ('.', '..')]
+                        
+                        if dir_items:
                             return False, "NOT_EMPTY_DIR"
                             
                         # Если папка пуста, удаляем её
@@ -345,26 +340,30 @@ class FTPClient:
         try:
             with self.ftp_lock:
                 current_dir = self.ftp.pwd()
+                
                 try:
                     # Переходим в удаляемую директорию
                     self.ftp.cwd(dirname)
                     
-                    # Получаем список всех файлов и папок
-                    items = self._get_file_list()
+                    # Получаем список файлов
+                    file_list = []
+                    self.ftp.retrlines('NLST', file_list.append)
+                    
+                    # Исключаем . и .. из списка
+                    file_list = [f for f in file_list if f not in ('.', '..')]
                     
                     # Удаляем каждый элемент
-                    for name, is_dir in items:
-                        if is_dir:
-                            # Рекурсивно удаляем поддиректорию
-                            success, message = self.delete_directory_recursive(name)
-                            if not success:
-                                raise Exception(f"Ошибка удаления поддиректории {name}: {message}")
-                        else:
-                            # Удаляем файл
+                    for item in file_list:
+                        try:
+                            # Пробуем удалить как файл
+                            self.ftp.delete(item)
+                        except:
                             try:
-                                self.ftp.delete(name)
+                                # Если не получилось - это папка, удаляем рекурсивно
+                                self.delete_directory_recursive(item)
                             except Exception as e:
-                                raise Exception(f"Ошибка удаления файла {name}: {str(e)}")
+                                self.ftp.cwd(current_dir)
+                                return False, f"Ошибка удаления {item}: {str(e)}"
                     
                     # Возвращаемся в родительскую директорию
                     self.ftp.cwd(current_dir)
@@ -374,9 +373,8 @@ class FTPClient:
                     return True, f"Папка '{dirname}' и её содержимое удалены"
                     
                 except Exception as e:
-                    # В случае ошибки возвращаемся в исходную директорию
                     self.ftp.cwd(current_dir)
-                    return False, str(e)
+                    return False, f"Ошибка при удалении директории: {str(e)}"
                     
         except Exception as e:
             return False, str(e)

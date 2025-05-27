@@ -77,34 +77,57 @@ class StatusBar(ttk.Frame):
     def __init__(self, parent, **kwargs):
         super().__init__(parent, style='Statusbar.TFrame', **kwargs)
         
-        self.status_label = ttk.Label(self,
+        # Создаем фрейм для статуса с отступами
+        status_frame = ttk.Frame(self, style='Statusbar.TFrame')
+        status_frame.pack(side="left", fill="x", expand=True, padx=5, pady=2)
+        
+        self.status_label = ttk.Label(status_frame,
                                     text="Готов",
                                     style='Statusbar.TLabel')
         self.status_label.pack(side="left", fill="x", expand=True)
         
-        self.progress = ttk.Progressbar(self,
+        # Создаем фрейм для прогресса с отступами
+        progress_frame = ttk.Frame(self, style='Statusbar.TFrame')
+        progress_frame.pack(side="right", padx=5, pady=2)
+        
+        self.progress = ttk.Progressbar(progress_frame,
                                       orient="horizontal",
                                       length=200,
-                                      mode='determinate')
-        self.progress.pack(side="right", padx=5)
+                                      mode='determinate',
+                                      style='Colored.Horizontal.TProgressbar')
+        self.progress.pack(side="right")
+        
+        # Добавляем метку для процентов
+        self.percent_label = ttk.Label(progress_frame,
+                                     text="",
+                                     style='Statusbar.TLabel')
+        self.percent_label.pack(side="right", padx=(0, 5))
 
     def set_status(self, text: str, error: bool = False) -> None:
         """Установка текста статуса"""
         self.status_label.configure(
             text=text,
-            foreground='red' if error else 'black'
+            style='StatusbarError.TLabel' if error else 'Statusbar.TLabel'
         )
+        # Обновляем немедленно
+        self.status_label.update_idletasks()
 
     def show_progress(self, show: bool = True) -> None:
         """Показать/скрыть индикатор прогресса"""
         if show:
-            self.progress.pack(side="right", padx=5)
+            self.progress.pack(side="right")
+            self.percent_label.pack(side="right", padx=(0, 5))
         else:
             self.progress.pack_forget()
+            self.percent_label.pack_forget()
 
     def set_progress(self, value: float) -> None:
         """Установка значения прогресса"""
         self.progress['value'] = value
+        self.percent_label.configure(text=f"{int(value)}%")
+        # Обновляем немедленно
+        self.progress.update_idletasks()
+        self.percent_label.update_idletasks()
 
 
 class ConnectionPanel(ttk.LabelFrame):
