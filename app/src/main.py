@@ -40,8 +40,22 @@ class Application(tk.Tk):
         super().__init__()
 
         self.title("FTP Client")
-        self.geometry("1400x800")
-
+        
+        # Получаем размеры экрана
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        
+        # Устанавливаем размер окна равным размеру экрана
+        self.geometry(f"{screen_width}x{screen_height}+0+0")
+        
+        # Настройка полноэкранного режима в зависимости от ОС
+        if sys.platform == 'darwin':  # macOS
+            self.attributes('-fullscreen', True)
+        elif sys.platform == 'win32':  # Windows
+            self.state('zoomed')
+        else:  # Linux
+            self.attributes('-zoomed', True)
+        
         # Инициализация компонентов
         self.settings = Settings()
         self.ftp_client = FTPClient()
@@ -207,7 +221,20 @@ class Application(tk.Tk):
         self.remote_files.bind("<Double-1>", self._on_remote_double_click)
         self.bind("<F5>", lambda e: self._refresh_lists())
         self.bind("<Delete>", lambda e: self._delete_selected())
+        self.bind("<Escape>", self._toggle_fullscreen)
         self._setup_context_menus()
+
+    def _toggle_fullscreen(self, event=None):
+        """Переключение полноэкранного режима"""
+        if sys.platform == 'darwin':  # macOS
+            is_fullscreen = self.attributes('-fullscreen')
+            self.attributes('-fullscreen', not is_fullscreen)
+        elif sys.platform == 'win32':  # Windows
+            is_zoomed = self.state() == 'zoomed'
+            self.state('normal' if is_zoomed else 'zoomed')
+        else:  # Linux
+            is_zoomed = self.attributes('-zoomed')
+            self.attributes('-zoomed', not is_zoomed)
 
     def _setup_context_menus(self):
         """Настройка контекстных меню"""
