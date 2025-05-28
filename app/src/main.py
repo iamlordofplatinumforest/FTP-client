@@ -23,6 +23,7 @@ from src.core.ftp_client import FTPClient
 from src.core.settings import Settings
 from src.gui.widgets import FileListView, ConnectionPanel, SearchPanel, PathPanel, StatusBar
 from src.gui.dialogs import QuickConnectDialog, HistoryDialog, BookmarksDialog, SettingsDialog, AboutDialog
+from src.gui.connection_stats import ConnectionStatsPanel
 from src.utils.crypto import Crypto
 from src.utils.helpers import filter_hidden_files, sort_items
 from src.gui.styles import setup_styles
@@ -157,6 +158,10 @@ class Application(tk.Tk):
         # Панель подключения
         self.connection_panel = ConnectionPanel(self, self._connect)
         self.connection_panel.pack(fill=tk.X, padx=5, pady=5)
+
+        # Панель статистики соединения
+        self.stats_panel = ConnectionStatsPanel(self)
+        self.stats_panel.pack(fill=tk.X, padx=5, pady=2)
 
         # Панель поиска
         self.search_panel = SearchPanel(self, self._on_search)
@@ -318,6 +323,7 @@ class Application(tk.Tk):
             self._refresh_remote_list()
             
             # Запускаем мониторинг соединения
+            self.stats_panel.start_monitoring(host, port)
             self.ftp_client.start_connection_monitor(self._on_connection_lost)
         else:
             self.status_bar.set_status(f"Ошибка подключения: {message}", error=True)
@@ -327,6 +333,9 @@ class Application(tk.Tk):
         debug_log("\nDEBUG: Начало отключения от сервера")
         
         try:
+            debug_log("DEBUG: Останавливаем мониторинг")
+            self.stats_panel.stop_monitoring()
+            
             debug_log("DEBUG: Вызываем disconnect у FTP клиента")
             self.ftp_client.disconnect()
             
