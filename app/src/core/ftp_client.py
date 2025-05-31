@@ -1,7 +1,3 @@
-"""
-FTP клиент - основной класс для работы с FTP-соединением
-"""
-
 from ftplib import FTP, FTP_TLS, error_perm
 import os
 from threading import Lock, Thread
@@ -16,7 +12,6 @@ from src.core.settings import Settings
 
 
 def debug_log(message: str):
-    """Принудительный вывод отладочной информации"""
     sys.stderr.write(f"{message}\n")
     sys.stderr.flush()
 
@@ -34,7 +29,6 @@ class FTPClient:
         self.remote_cache = {}
 
     def connect(self, host: str, port: int, user: str, password: str) -> Tuple[bool, str]:
-        """Подключение к серверу"""
         try:
             with self.ftp_lock:
                 if self.ftp:
@@ -45,7 +39,6 @@ class FTPClient:
                 self.ftp.login(user, password)
                 self.ftp.encoding = self.settings.get('encoding', 'utf-8')
 
-                # Сохраняем параметры подключения для возможного переподключения
                 self.connection_params = {
                     'host': host,
                     'port': port,
@@ -58,14 +51,12 @@ class FTPClient:
             return False, str(e)
 
     def reconnect(self) -> Tuple[bool, str]:
-        """Попытка переподключения к серверу"""
         if not self.connection_params:
             return False, "Нет сохраненных параметров подключения"
 
         return self.connect(**self.connection_params)
 
     def disconnect(self) -> None:
-        """Отключение от сервера"""
         debug_log("\nDEBUG: FTPClient: Начало отключения")
         self.monitor_running = False
 
@@ -82,7 +73,6 @@ class FTPClient:
                     debug_log("DEBUG: FTPClient: Отключение завершено")
 
     def _get_file_list(self) -> List[Tuple[str, bool]]:
-        """Возвращает список кортежей (имя, является_папкой) для элементов в текущей директории"""
         file_list = []
         self.ftp.retrlines('LIST', file_list.append)
         items = []
@@ -99,18 +89,15 @@ class FTPClient:
         return items
 
     def list_files(self) -> List[Tuple[str, str, str, str]]:
-        """Получение списка файлов в текущей директории"""
         if not self.ftp:
             return []
 
         items = []
         try:
             with self.ftp_lock:
-                # Получаем список всех файлов
                 file_list = []
                 self.ftp.retrlines('LIST', file_list.append)
 
-                # Обрабатываем каждую строку
                 for line in file_list:
                     try:
                         parts = line.split(maxsplit=8)
@@ -124,7 +111,6 @@ class FTPClient:
                         perm = parts[0]
                         is_dir = perm.startswith('d')
 
-                        # Определяем размер
                         if is_dir:
                             try:
                                 current_dir = self.ftp.pwd()
@@ -141,7 +127,6 @@ class FTPClient:
                             except:
                                 size = parts[4]
 
-                        # Определяем дату модификации
                         time_str = ' '.join(parts[5:8])
                         modified = self._parse_ftp_time(time_str)
 
@@ -155,7 +140,6 @@ class FTPClient:
 
     def download_file(self, remote_file: str, local_path: str,
                      progress_callback=None) -> Tuple[bool, str]:
-        """Скачивание файла"""
         if not self.ftp:
             return False, "Нет подключения"
 
@@ -190,7 +174,6 @@ class FTPClient:
 
     def upload_file(self, local_path: str, remote_file: str,
                    progress_callback=None) -> Tuple[bool, str]:
-        """Загрузка файла"""
         if not self.ftp:
             return False, "Нет подключения"
 
@@ -223,7 +206,6 @@ class FTPClient:
 
     def upload_folder(self, local_path: str, remote_folder: str,
                      progress_callback=None) -> Tuple[bool, str]:
-        """Рекурсивная загрузка папки"""
         try:
             with self.ftp_lock:
                 try:
@@ -253,7 +235,6 @@ class FTPClient:
             return False, str(e)
 
     def create_directory(self, dirname: str) -> Tuple[bool, str]:
-        """Создание директории"""
         if not self.ftp:
             return False, "Нет подключения"
 
@@ -263,19 +244,16 @@ class FTPClient:
                 return False, "Пустое имя директории"
 
             with self.ftp_lock:
-                # Проверяем существование папки через список файлов
                 items = self._get_file_list()
                 for name, is_dir in items:
                     if name == dirname and is_dir:
                         return False, f"Папка '{dirname}' уже существует"
 
-                # Создаем папку
                 try:
                     self.ftp.mkd(dirname)
                     return True, f"Папка '{dirname}' создана"
                 except error_perm as e:
                     if '550' in str(e):
-                        # Возможно, папка уже существует, но не была найдена в списке
                         return False, f"Папка '{dirname}' не может быть создана: {str(e)}"
                     else:
                         return False, f"Ошибка создания папки: {str(e)}"
@@ -285,7 +263,6 @@ class FTPClient:
             return False, str(e)
 
     def delete_item(self, name: str) -> Tuple[bool, str]:
-        """Удаление файла или папки"""
         if not self.ftp:
             return False, "Нет подключения"
 
@@ -295,7 +272,6 @@ class FTPClient:
                 return False, "Пустое имя"
 
             with self.ftp_lock:
-                # Проверяем, является ли элемент директорией
                 current_dir = self.ftp.pwd()
                 try:
                     self.ftp.cwd(name)
@@ -306,19 +282,16 @@ class FTPClient:
 
                 if is_dir:
                     try:
-                        # Проверяем содержимое папки
                         self.ftp.cwd(name)
                         dir_items = []
                         self.ftp.retrlines('NLST', dir_items.append)
                         self.ftp.cwd(current_dir)
-                        
-                        # Исключаем . и .. из списка
+
                         dir_items = [item for item in dir_items if item not in ('.', '..')]
                         
                         if dir_items:
                             return False, "NOT_EMPTY_DIR"
-                            
-                        # Если папка пуста, удаляем её
+
                         self.ftp.rmd(name)
                         return True, f"Папка '{name}' удалена"
                     except Exception as e:
@@ -333,7 +306,6 @@ class FTPClient:
             return False, str(e)
 
     def delete_directory_recursive(self, dirname: str) -> Tuple[bool, str]:
-        """Рекурсивное удаление директории со всем содержимым"""
         if not self.ftp:
             return False, "Нет подключения"
 
@@ -342,33 +314,25 @@ class FTPClient:
                 current_dir = self.ftp.pwd()
                 
                 try:
-                    # Переходим в удаляемую директорию
                     self.ftp.cwd(dirname)
-                    
-                    # Получаем список файлов
+
                     file_list = []
                     self.ftp.retrlines('NLST', file_list.append)
-                    
-                    # Исключаем . и .. из списка
+
                     file_list = [f for f in file_list if f not in ('.', '..')]
-                    
-                    # Удаляем каждый элемент
+
                     for item in file_list:
                         try:
-                            # Пробуем удалить как файл
                             self.ftp.delete(item)
                         except:
                             try:
-                                # Если не получилось - это папка, удаляем рекурсивно
                                 self.delete_directory_recursive(item)
                             except Exception as e:
                                 self.ftp.cwd(current_dir)
                                 return False, f"Ошибка удаления {item}: {str(e)}"
-                    
-                    # Возвращаемся в родительскую директорию
+
                     self.ftp.cwd(current_dir)
-                    
-                    # Удаляем саму директорию
+
                     self.ftp.rmd(dirname)
                     return True, f"Папка '{dirname}' и её содержимое удалены"
                     
@@ -380,7 +344,6 @@ class FTPClient:
             return False, str(e)
 
     def rename_item(self, old_name: str, new_name: str) -> Tuple[bool, str]:
-        """Переименование файла или папки"""
         if not self.ftp:
             return False, "Нет подключения"
 
@@ -392,7 +355,6 @@ class FTPClient:
             return False, str(e)
 
     def change_directory(self, path: str) -> Tuple[bool, str]:
-        """Смена текущей директории"""
         if not self.ftp:
             return False, "Нет подключения"
 
@@ -405,7 +367,6 @@ class FTPClient:
             return False, str(e)
 
     def get_current_directory(self) -> str:
-        """Получение текущей директории"""
         if not self.ftp:
             return "/"
         try:
@@ -433,18 +394,15 @@ class FTPClient:
             if ':' in parts[2]:  # Формат времени ЧЧ:ММ
                 hour, minute = map(int, parts[2].split(':'))
                 year = current_year
-                
-                # Создаем дату в UTC
+
                 dt = datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
-                
-                # Если дата в будущем, значит это файл из прошлого года
+
                 if dt > datetime.now(timezone.utc):
                     dt = datetime(year - 1, month, day, hour, minute, tzinfo=timezone.utc)
-                
-                # Конвертируем в локальное время
+
                 local_dt = dt.astimezone()
                 return local_dt.strftime("%Y-%m-%d %H:%M")
-            else:  # Формат с годом
+            else:
                 year = int(parts[2])
                 dt = datetime(year, month, day, 0, 0, tzinfo=timezone.utc)
                 local_dt = dt.astimezone()
@@ -453,7 +411,6 @@ class FTPClient:
             return time_str
 
     def _get_optimal_buffer_size(self, file_size: int) -> int:
-        """Определение оптимального размера буфера"""
         if file_size < 1024 * 1024:  # < 1MB
             return 8192
         elif file_size < 10 * 1024 * 1024:  # < 10MB
@@ -462,7 +419,6 @@ class FTPClient:
             return 65536
 
     def start_connection_monitor(self, on_connection_lost: Callable):
-        """Запуск мониторинга соединения"""
         def monitor():
             while not self.stop_monitor:
                 try:
@@ -480,14 +436,13 @@ class FTPClient:
                             on_connection_lost()
                     else:
                         on_connection_lost()
-                time.sleep(30)  # Проверяем каждые 30 секунд
+                time.sleep(30)
 
         self.stop_monitor = False
         self.monitor_thread = Thread(target=monitor, daemon=True)
         self.monitor_thread.start()
 
     def stop_connection_monitor(self):
-        """Остановка мониторинга соединения"""
         self.stop_monitor = True
         if self.monitor_thread:
             self.monitor_thread.join(timeout=1)

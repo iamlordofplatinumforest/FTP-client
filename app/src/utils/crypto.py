@@ -1,7 +1,3 @@
-"""
-Модуль для шифрования и дешифрования данных
-"""
-
 from cryptography.fernet import Fernet
 import base64
 import os
@@ -16,7 +12,6 @@ class Crypto:
         self.fernet = Fernet(self.key)
 
     def _load_or_generate_key(self) -> bytes:
-        """Загрузка или генерация ключа шифрования"""
         try:
             if os.path.exists(self.key_file):
                 with open(self.key_file, 'rb') as f:
@@ -24,7 +19,6 @@ class Crypto:
         except Exception:
             pass
 
-        # Генерируем новый ключ
         key = Fernet.generate_key()
         try:
             with open(self.key_file, 'wb') as f:
@@ -34,7 +28,6 @@ class Crypto:
         return key
 
     def encrypt(self, data: str) -> str:
-        """Шифрование строки"""
         if not data:
             return ""
         try:
@@ -44,7 +37,6 @@ class Crypto:
             return ""
 
     def decrypt(self, encrypted_data: str) -> str:
-        """Дешифрование строки"""
         if not encrypted_data:
             return ""
         try:

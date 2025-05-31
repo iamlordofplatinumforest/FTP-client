@@ -20,7 +20,6 @@ class ConnectionStatsPanel(ttk.LabelFrame):
         self.monitor = None
         
     def start_monitoring(self, host: str, port: int):
-        """Запуск мониторинга для указанного хоста"""
         if self.monitor:
             self.stop_monitoring()
             
@@ -29,18 +28,15 @@ class ConnectionStatsPanel(ttk.LabelFrame):
         self.update_stats()
         
     def stop_monitoring(self):
-        """Остановка мониторинга"""
         if self.monitor:
             self.monitor.stop_monitoring()
             self.monitor = None
-            
-        # Сбрасываем метки
+
         self.latency_label.config(text="Задержка: --")
         self.packet_loss_label.config(text="Потери пакетов: --")
         self.last_check_label.config(text="Последняя проверка: --")
             
     def update_stats(self):
-        """Обновление отображаемой статистики"""
         if self.monitor:
             stats = self.monitor.get_stats()
             self.latency_label.config(
@@ -49,6 +45,5 @@ class ConnectionStatsPanel(ttk.LabelFrame):
                 text=f"Потери пакетов: {stats['packet_loss']:.1f}%")
             self.last_check_label.config(
                 text=f"Последняя проверка: {time.strftime('%H:%M:%S')}")
-        
-        # Планируем следующее обновление
+
         self.after(1000, self.update_stats) 

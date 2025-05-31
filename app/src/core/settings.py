@@ -1,7 +1,3 @@
-"""
-Модуль управления настройками приложения
-"""
-
 import os
 import json
 from typing import Dict, Any
@@ -28,12 +24,10 @@ class Settings:
         self.current_settings = self.load_settings()
 
     def load_settings(self) -> Dict[str, Any]:
-        """Загрузка настроек из файла"""
         try:
             if os.path.exists(self.settings_file):
                 with open(self.settings_file, 'r') as f:
                     saved_settings = json.load(f)
-                    # Обновляем дефолтные настройки сохраненными
                     settings = self.default_settings.copy()
                     settings.update(saved_settings)
                     return settings
@@ -42,7 +36,6 @@ class Settings:
         return self.default_settings.copy()
 
     def save_settings(self):
-        """Сохранение настроек в файл"""
         try:
             with open(self.settings_file, 'w') as f:
                 json.dump(self.current_settings, f, indent=4)
@@ -50,18 +43,14 @@ class Settings:
             print(f"Ошибка сохранения настроек: {e}")
 
     def get(self, key: str, default: Any = None) -> Any:
-        """Получение значения настройки"""
         return self.current_settings.get(key, default)
 
     def set(self, key: str, value: Any):
-        """Установка значения настройки"""
         self.current_settings[key] = value
 
     def update(self, settings: Dict[str, Any]):
-        """Обновление нескольких настроек"""
         self.current_settings.update(settings)
 
     def reset(self):
-        """Сброс настроек на значения по умолчанию"""
         self.current_settings = self.default_settings.copy()
         self.save_settings() 
