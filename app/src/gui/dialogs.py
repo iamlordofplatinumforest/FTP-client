@@ -238,15 +238,17 @@ class AboutDialog:
                  font=('Helvetica', 16, 'bold')).pack(pady=10)
         
         ttk.Label(frame, text="Версия 1.0", 
-                 font=('Helvetica', 10)).pack()
-        
-        ttk.Label(frame, text="\n© 2025 Все права защищены\n",
-                 font=('Helvetica', 9)).pack()
+                 font=('Helvetica', 12)).pack()
         
         ttk.Label(frame, text="Программа для работы с FTP-серверами\n" +
                             "Поддерживает основные операции с файлами,\n" +
                             "закладки и историю подключений.", 
-                 justify=tk.CENTER).pack(pady=10)
+                 justify=tk.CENTER, font=('Helvetica', 14)).pack(pady=10)
+
+        ttk.Label(frame, text="Ефросинья Сологуб, 2025",
+                  font=('Helvetica', 14, 'bold')).pack()
+
+
         
         ttk.Button(frame, text="Закрыть", 
                   command=self.dialog.destroy).pack(pady=10) 
