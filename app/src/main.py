@@ -15,6 +15,7 @@ from typing import Dict, List, Tuple
 import base64
 import sys
 import threading
+import shutil  # Добавляем импорт shutil
 
 from src.core.ftp_client import FTPClient
 from src.core.settings import Settings
@@ -199,10 +200,78 @@ class Application(tk.Tk):
         self.bind_all("<F5>", lambda e: self._refresh_lists())
         self.bind_all("<Escape>", lambda e: self._toggle_fullscreen())
         
-        # Навигация
-        self.bind_all("<BackSpace>", lambda e: self._navigate_up())
+        # Навигация с отладочным выводом
+        def handle_backspace(event):
+            debug_log(f"\nDEBUG: Нажата клавиша: BackSpace")
+            debug_log(f"DEBUG: Событие: {event}")
+            debug_log(f"DEBUG: Keysym: {event.keysym}")
+            debug_log(f"DEBUG: Keycode: {event.keycode}")
+            debug_log(f"DEBUG: Char: {event.char if hasattr(event, 'char') else 'Нет символа'}")
+            
+            # Если это клавиша Delete (проверяем по keycode)
+            if event.keycode == 855638143:
+                debug_log("DEBUG: Обработка удаления файла")
+                # Определяем, какая панель в фокусе
+                if self.local_files.focus_get() == self.local_files:
+                    debug_log("DEBUG: Удаление из локальной панели")
+                    self._delete_local()
+                elif self.remote_files.focus_get() == self.remote_files and self.ftp_client.ftp:
+                    debug_log("DEBUG: Удаление с удаленного сервера")
+                    selected = self.remote_files.selection()
+                    if not selected:
+                        return "break"
+                    
+                    if not messagebox.askyesno("Подтверждение", 
+                                             "Вы действительно хотите удалить выбранные файлы?"):
+                        return "break"
+                    
+                    for item_id in selected:
+                        values = self.remote_files.item(item_id)['values']
+                        filename = str(values[0])
+                        is_dir = values[2] == "Папка"
+                        
+                        if is_dir:
+                            success, message = self.ftp_client.delete_directory_recursive(filename)
+                        else:
+                            success, message = self.ftp_client.delete_item(filename)
+                            
+                        if not success:
+                            if message == "NOT_EMPTY_DIR":
+                                if messagebox.askyesno("Подтверждение", 
+                                                     f"Папка '{filename}' не пуста. Удалить её содержимое?"):
+                                    success, message = self.ftp_client.delete_directory_recursive(filename)
+                            else:
+                                messagebox.showerror("Ошибка", f"Не удалось удалить {filename}: {message}")
+                    
+                    self._refresh_remote_list()
+                return "break"
+            # Иначе это действительно BackSpace
+            return self._navigate_up()
+            
+        self.bind_all("<BackSpace>", handle_backspace)
         self.bind_all("<Alt-Left>", lambda e: self._navigate_up())
         self.bind_all("<Alt-Up>", lambda e: self._navigate_up())
+        
+        # Предотвращаем действие клавиши Delete с отладкой
+        def debug_delete(event):
+            debug_log(f"\nDEBUG: Нажата клавиша Delete")
+            debug_log(f"DEBUG: Событие: {event}")
+            debug_log(f"DEBUG: Keysym: {event.keysym}")
+            debug_log(f"DEBUG: Keycode: {event.keycode}")
+            debug_log(f"DEBUG: Char: {event.char if hasattr(event, 'char') else 'Нет символа'}")
+            return "break"
+            
+        self.bind_all("<Delete>", debug_delete)
+        
+        # Контекстное меню - привязываем к правой кнопке мыши
+        if sys.platform == 'darwin':
+            # На macOS правая кнопка это Button-2
+            self.local_files.bind("<Button-2>", self._show_local_menu)
+            self.remote_files.bind("<Button-2>", self._show_remote_menu)
+        else:
+            # На Windows/Linux правая кнопка это Button-3
+            self.local_files.bind("<Button-3>", self._show_local_menu)
+            self.remote_files.bind("<Button-3>", self._show_remote_menu)
         
         # Используем Command на macOS и Control на других системах
         if sys.platform == 'darwin':
@@ -240,66 +309,73 @@ class Application(tk.Tk):
             self.bind_all("<Control-h>", lambda e: self._show_connection_history())
             self.bind_all("<Control-comma>", lambda e: self._show_settings())
         
-        # Контекстное меню
-        self.local_files.bind("<Button-3>", self._show_local_menu)
-        self.remote_files.bind("<Button-3>", self._show_remote_menu)
-        
         # Создаем контекстные меню
         self._create_context_menus()
 
     def _create_context_menus(self):
         """Создание контекстных меню"""
-        # Локальное контекстное меню
-        self.local_context_menu = tk.Menu(self, tearoff=0)
-        self.local_context_menu.add_command(label="Открыть", command=self._open_local_file)
-        self.local_context_menu.add_separator()
-        self.local_context_menu.add_command(label="Копировать", command=lambda: self._copy_files('local'))
-        self.local_context_menu.add_command(label="Вставить", command=lambda: self._paste_files('local'))
-        self.local_context_menu.add_separator()
-        self.local_context_menu.add_command(label="Создать папку", command=self._create_local_dir)
-        self.local_context_menu.add_command(label="Переименовать", command=self._rename_local)
-        self.local_context_menu.add_command(label="Удалить", command=self._delete_local)
-        self.local_context_menu.add_separator()
-        self.local_context_menu.add_command(label="Загрузить на сервер", command=self._upload_files)
+        debug_log("\nDEBUG: Создание контекстных меню")
         
+        # Локальное контекстное меню
+        self.local_menu = tk.Menu(self, tearoff=0)
+        self.local_menu.add_command(label="Открыть", command=self._open_local_file)
+        self.local_menu.add_separator()
+        self.local_menu.add_command(label="Копировать", command=lambda: self._copy_files('local'))
+        self.local_menu.add_command(label="Вставить", command=lambda: self._paste_files('local'))
+        self.local_menu.add_separator()
+        self.local_menu.add_command(label="Переименовать", command=self._rename_local)
+        self.local_menu.add_command(label="Удалить", command=self._delete_local)
+        self.local_menu.add_separator()
+        self.local_menu.add_command(label="Загрузить на сервер", command=self._upload_files)
+
         # Удаленное контекстное меню
-        self.remote_context_menu = tk.Menu(self, tearoff=0)
-        self.remote_context_menu.add_command(label="Скачать", command=self._download_files)
-        self.remote_context_menu.add_separator()
-        self.remote_context_menu.add_command(label="Копировать", command=lambda: self._copy_files('remote'))
-        self.remote_context_menu.add_command(label="Вставить", command=lambda: self._paste_files('remote'))
-        self.remote_context_menu.add_separator()
-        self.remote_context_menu.add_command(label="Создать папку", command=self._create_remote_dir)
-        self.remote_context_menu.add_command(label="Переименовать", command=self._rename_remote)
-        self.remote_context_menu.add_command(label="Удалить", command=self._delete_remote)
+        self.remote_menu = tk.Menu(self, tearoff=0)
+        self.remote_menu.add_command(label="Скачать", command=self._download_files)
+        self.remote_menu.add_separator()
+        self.remote_menu.add_command(label="Копировать", command=lambda: self._copy_files('remote'))
+        self.remote_menu.add_command(label="Вставить", command=lambda: self._paste_files('remote'))
+        self.remote_menu.add_separator()
+        self.remote_menu.add_command(label="Переименовать", command=self._rename_remote)
+        self.remote_menu.add_command(label="Удалить", command=self._delete_remote)
 
     def _show_local_menu(self, event):
         """Показ локального контекстного меню"""
+        debug_log("\nDEBUG: Вызов локального контекстного меню")
+        
         item = self.local_files.identify_row(event.y)
         if item:
+            debug_log(f"DEBUG: Выбран элемент {item}")
             # Снимаем текущее выделение, если не зажат Ctrl/Command
             if not (event.state & 0x0004):  # 0x0004 это Control на Windows/Linux
-                self.local_files.selection_clear(0, tk.END)
+                for selected_item in self.local_files.selection():
+                    self.local_files.selection_remove(selected_item)
             # Выделяем элемент под курсором
             self.local_files.selection_add(item)
             # Показываем меню
-            self.local_context_menu.post(event.x_root, event.y_root)
+            self.local_menu.post(event.x_root, event.y_root)
+            debug_log(f"DEBUG: Меню показано в координатах {event.x_root}, {event.y_root}")
         return "break"
 
     def _show_remote_menu(self, event):
         """Показ удаленного контекстного меню"""
+        debug_log("\nDEBUG: Вызов удаленного контекстного меню")
+        
         if not self.ftp_client.ftp:
+            debug_log("DEBUG: FTP клиент не подключен")
             return
             
         item = self.remote_files.identify_row(event.y)
         if item:
+            debug_log(f"DEBUG: Выбран элемент {item}")
             # Снимаем текущее выделение, если не зажат Ctrl/Command
             if not (event.state & 0x0004):  # 0x0004 это Control на Windows/Linux
-                self.remote_files.selection_clear(0, tk.END)
+                for selected_item in self.remote_files.selection():
+                    self.remote_files.selection_remove(selected_item)
             # Выделяем элемент под курсором
             self.remote_files.selection_add(item)
             # Показываем меню
-            self.remote_context_menu.post(event.x_root, event.y_root)
+            self.remote_menu.post(event.x_root, event.y_root)
+            debug_log(f"DEBUG: Меню показано в координатах {event.x_root}, {event.y_root}")
         return "break"
 
     def _copy_files(self, source):
@@ -328,30 +404,96 @@ class Application(tk.Tk):
         if self.clipboard_source == target:
             # Копирование в ту же панель - создаем копии файлов
             if target == 'local':
-                for filename in self.clipboard_files:
-                    src_path = os.path.join(self.settings.get('default_local_dir'), filename)
-                    base, ext = os.path.splitext(filename)
-                    new_name = f"{base} - копия{ext}"
-                    dst_path = os.path.join(self.settings.get('default_local_dir'), new_name)
+                try:
+                    import shutil  # Импортируем здесь для уверенности
+                    total = len(self.clipboard_files)
                     
-                    if os.path.isdir(src_path):
-                        import shutil
-                        shutil.copytree(src_path, dst_path)
-                    else:
-                        shutil.copy2(src_path, dst_path)
-                        
-                self._refresh_local_list()
+                    for i, filename in enumerate(self.clipboard_files, 1):
+                        try:
+                            src_path = os.path.join(self.settings.get('default_local_dir'), filename)
+                            base, ext = os.path.splitext(filename)
+                            new_name = f"{base} - копия{ext}"
+                            dst_path = os.path.join(self.settings.get('default_local_dir'), new_name)
+                            
+                            # Проверяем существование файла
+                            if os.path.exists(dst_path):
+                                if not messagebox.askyesno("Подтверждение", 
+                                                         f"Файл {new_name} уже существует. Перезаписать?"):
+                                    continue
+                                # Если файл существует и пользователь согласился перезаписать,
+                                # удаляем существующий файл/директорию
+                                if os.path.isdir(dst_path):
+                                    shutil.rmtree(dst_path)
+                                else:
+                                    os.remove(dst_path)
+                            
+                            # Копируем файл или директорию
+                            if os.path.isdir(src_path):
+                                shutil.copytree(src_path, dst_path)
+                            else:
+                                shutil.copy2(src_path, dst_path)
+                            
+                            # Обновляем прогресс
+                            progress = (i / total) * 100
+                            self.status_bar.set_progress(progress)
+                            self.status_bar.set_status(f"Копирование {i}/{total}: {filename}")
+                            
+                        except Exception as e:
+                            error_msg = str(e)
+                            debug_log(f"DEBUG: Ошибка копирования {filename}: {error_msg}")
+                            messagebox.showerror("Ошибка", f"Не удалось скопировать {filename}: {error_msg}")
+                    
+                    self._refresh_local_list()
+                    self.status_bar.set_status("Копирование завершено")
+                    self.status_bar.set_progress(100)
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    debug_log(f"DEBUG: Общая ошибка копирования: {error_msg}")
+                    self.status_bar.set_status(f"Ошибка копирования: {error_msg}", error=True)
+                    messagebox.showerror("Ошибка", f"Ошибка копирования: {error_msg}")
                 
             else:  # remote
                 if not self.ftp_client.ftp:
                     return
                     
-                for filename in self.clipboard_files:
-                    base, ext = os.path.splitext(filename)
-                    new_name = f"{base} - копия{ext}"
-                    self.ftp_client.copy_file(filename, new_name)
-                    
-                self._refresh_remote_list()
+                def copy_thread():
+                    try:
+                        total = len(self.clipboard_files)
+                        for i, filename in enumerate(self.clipboard_files, 1):
+                            base, ext = os.path.splitext(filename)
+                            new_name = f"{base} - копия{ext}"
+                            
+                            # Обновляем прогресс
+                            progress = (i - 1) / total * 100
+                            self.schedule_update(lambda p=progress, f=filename: [
+                                self.status_bar.set_progress(p),
+                                self.status_bar.set_status(f"Копирование {i}/{total}: {f}")
+                            ])
+                            
+                            success, message = self.ftp_client.copy_file(filename, new_name)
+                            if not success:
+                                self.schedule_update(lambda: [
+                                    messagebox.showerror("Ошибка", f"Ошибка копирования {filename}: {message}"),
+                                    self.status_bar.set_status(f"Ошибка копирования: {message}", error=True)
+                                ])
+                                return
+
+                        self.schedule_update(lambda: [
+                            self._refresh_remote_list(),
+                            self.status_bar.set_status("Копирование завершено"),
+                            self.status_bar.set_progress(100)
+                        ])
+
+                    except Exception as e:
+                        error_msg = str(e)
+                        debug_log(f"DEBUG: Ошибка в потоке копирования: {error_msg}")
+                        self.schedule_update(lambda: [
+                            messagebox.showerror("Ошибка", f"Ошибка копирования: {error_msg}"),
+                            self.status_bar.set_status(f"Ошибка копирования: {error_msg}", error=True)
+                        ])
+
+                Thread(target=copy_thread, daemon=True).start()
                 
         else:
             # Копирование между панелями
@@ -392,42 +534,166 @@ class Application(tk.Tk):
         values = self.local_files.item(selected[0])['values']
         old_name = str(values[0])
         
-        new_name = simpledialog.askstring("Переименовать", 
-                                        "Введите новое имя:",
-                                        initialvalue=old_name)
-        if not new_name or new_name == old_name:
-            return
-            
+        # Создаем диалоговое окно
+        dialog = tk.Toplevel(self)
+        dialog.title("Переименовать")
+        dialog.geometry("300x120")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        # Центрируем окно
+        dialog.geometry("+%d+%d" % (
+            self.winfo_rootx() + self.winfo_width()//2 - 150,
+            self.winfo_rooty() + self.winfo_height()//2 - 60
+        ))
+        
+        # Создаем и размещаем элементы
+        frame = ttk.Frame(dialog, padding="10")
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(frame, text="Введите новое имя:").pack(pady=(0, 5))
+        
+        entry = ttk.Entry(frame, width=40)
+        entry.insert(0, old_name)
+        entry.pack(pady=(0, 10))
+        entry.select_range(0, len(old_name))
+        entry.focus()
+        
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X)
+        
+        def rename():
+            new_name = entry.get().strip()
+            if new_name and new_name != old_name:
+                dialog.destroy()
+                self._perform_local_rename(old_name, new_name)
+            elif not new_name:
+                messagebox.showwarning("Ошибка", "Имя файла не может быть пустым")
+        
+        ttk.Button(btn_frame, text="OK", command=rename, width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Отмена", command=dialog.destroy, width=10).pack(side=tk.LEFT)
+        
+        # Привязываем Enter к кнопке OK
+        dialog.bind('<Return>', lambda e: rename())
+        dialog.bind('<Escape>', lambda e: dialog.destroy())
+
+    def _perform_local_rename(self, old_name, new_name):
+        """Выполняет фактическое переименование локального файла"""
         try:
-            old_path = os.path.join(self.settings.get('default_local_dir'), old_name)
-            new_path = os.path.join(self.settings.get('default_local_dir'), new_name)
+            current_dir = self.settings.get('default_local_dir')
+            old_path = os.path.join(current_dir, old_name)
+            new_path = os.path.join(current_dir, new_name)
             
+            debug_log(f"\nDEBUG: Переименование файла")
+            debug_log(f"DEBUG: Текущая директория: {current_dir}")
+            debug_log(f"DEBUG: Старый путь: {old_path}")
+            debug_log(f"DEBUG: Новый путь: {new_path}")
+            
+            # Проверяем существование исходного файла
+            if not os.path.exists(old_path):
+                error_msg = f"Файл '{old_name}' не найден в директории '{current_dir}'"
+                debug_log(f"DEBUG: {error_msg}")
+                self.status_bar.set_status(error_msg, error=True)
+                messagebox.showerror("Ошибка", error_msg)
+                return
+            
+            # Проверяем существование целевого файла
             if os.path.exists(new_path):
                 if not messagebox.askyesno("Подтверждение", 
                                          f"Файл {new_name} уже существует. Перезаписать?"):
                     return
+                # Если файл существует и пользователь согласился перезаписать,
+                # удаляем существующий файл
+                try:
+                    if os.path.isdir(new_path):
+                        import shutil
+                        shutil.rmtree(new_path)
+                    else:
+                        os.remove(new_path)
+                except Exception as e:
+                    error_msg = f"Не удалось удалить существующий файл: {str(e)}"
+                    debug_log(f"DEBUG: {error_msg}")
+                    self.status_bar.set_status(error_msg, error=True)
+                    messagebox.showerror("Ошибка", error_msg)
+                    return
             
             os.rename(old_path, new_path)
             self._refresh_local_list()
-            self.status_bar.set_status(f"Файл переименован: {old_name} -> {new_name}")
+            success_msg = f"Файл переименован: {old_name} -> {new_name}"
+            debug_log(f"DEBUG: {success_msg}")
+            self.status_bar.set_status(success_msg)
         except Exception as e:
-            self.status_bar.set_status(f"Ошибка переименования: {str(e)}", error=True)
-            messagebox.showerror("Ошибка", f"Не удалось переименовать файл: {str(e)}")
+            error_msg = str(e)
+            debug_log(f"DEBUG: Ошибка переименования: {error_msg}")
+            
+            # Добавляем более понятные сообщения об ошибках
+            if "Permission denied" in error_msg:
+                error_msg = "Отказано в доступе. Проверьте права на файл и директорию."
+            elif "No such file or directory" in error_msg:
+                error_msg = f"Файл или директория не найдены. Проверьте, что файл '{old_name}' существует."
+            elif "Invalid cross-device link" in error_msg:
+                error_msg = "Невозможно переместить файл между разными дисками. Попробуйте скопировать и удалить."
+            
+            self.status_bar.set_status(f"Ошибка переименования: {error_msg}", error=True)
+            messagebox.showerror("Ошибка", f"Не удалось переименовать файл: {error_msg}")
 
     def _create_local_dir(self):
         """Создание локальной папки"""
-        dirname = simpledialog.askstring("Создать папку", "Введите имя папки:")
-        if not dirname:
-            return
-            
-        try:
-            path = os.path.join(self.settings.get('default_local_dir'), dirname)
-            os.makedirs(path)
-            self._refresh_local_list()
-            self.status_bar.set_status(f"Создана папка: {dirname}")
-        except Exception as e:
-            self.status_bar.set_status(f"Ошибка создания папки: {str(e)}", error=True)
-            messagebox.showerror("Ошибка", f"Не удалось создать папку: {str(e)}")
+        # Создаем диалоговое окно
+        dialog = tk.Toplevel(self)
+        dialog.title("Создать папку")
+        dialog.geometry("300x120")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        # Центрируем окно
+        dialog.geometry("+%d+%d" % (
+            self.winfo_rootx() + self.winfo_width()//2 - 150,
+            self.winfo_rooty() + self.winfo_height()//2 - 60
+        ))
+        
+        # Создаем и размещаем элементы
+        frame = ttk.Frame(dialog, padding="10")
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(frame, text="Введите имя папки:").pack(pady=(0, 5))
+        
+        entry = ttk.Entry(frame, width=40)
+        entry.pack(pady=(0, 10))
+        entry.focus()
+        
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X)
+        
+        def create():
+            dirname = entry.get().strip()
+            if not dirname:
+                messagebox.showwarning("Ошибка", "Имя папки не может быть пустым")
+                return
+                
+            dialog.destroy()
+            try:
+                path = os.path.join(self.settings.get('default_local_dir'), dirname)
+                os.makedirs(path)
+                self._refresh_local_list()
+                self.status_bar.set_status(f"Создана папка: {dirname}")
+            except Exception as e:
+                error_msg = str(e)
+                if "Permission denied" in error_msg:
+                    error_msg = "Отказано в доступе. Проверьте права на директорию."
+                elif "File exists" in error_msg:
+                    error_msg = f"Папка '{dirname}' уже существует."
+                self.status_bar.set_status(f"Ошибка создания папки: {error_msg}", error=True)
+                messagebox.showerror("Ошибка", f"Не удалось создать папку: {error_msg}")
+        
+        ttk.Button(btn_frame, text="OK", command=create, width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Отмена", command=dialog.destroy, width=10).pack(side=tk.LEFT)
+        
+        # Привязываем Enter к кнопке OK
+        dialog.bind('<Return>', lambda e: create())
+        dialog.bind('<Escape>', lambda e: dialog.destroy())
 
     def _rename_remote(self):
         """Переименование удаленного файла"""
@@ -442,19 +708,71 @@ class Application(tk.Tk):
         values = self.remote_files.item(selected[0])['values']
         old_name = str(values[0])
         
-        new_name = simpledialog.askstring("Переименовать", 
-                                        "Введите новое имя:",
-                                        initialvalue=old_name)
-        if not new_name or new_name == old_name:
-            return
-            
-        try:
-            self.ftp_client.ftp.rename(old_name, new_name)
-            self._refresh_remote_list()
-            self.status_bar.set_status(f"Файл переименован: {old_name} -> {new_name}")
-        except Exception as e:
-            self.status_bar.set_status(f"Ошибка переименования: {str(e)}", error=True)
-            messagebox.showerror("Ошибка", f"Не удалось переименовать файл: {str(e)}")
+        # Создаем диалоговое окно
+        dialog = tk.Toplevel(self)
+        dialog.title("Переименовать")
+        dialog.geometry("300x120")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        # Центрируем окно
+        dialog.geometry("+%d+%d" % (
+            self.winfo_rootx() + self.winfo_width()//2 - 150,
+            self.winfo_rooty() + self.winfo_height()//2 - 60
+        ))
+        
+        # Создаем и размещаем элементы
+        frame = ttk.Frame(dialog, padding="10")
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(frame, text="Введите новое имя:").pack(pady=(0, 5))
+        
+        entry = ttk.Entry(frame, width=40)
+        entry.insert(0, old_name)
+        entry.pack(pady=(0, 10))
+        entry.select_range(0, len(old_name))
+        entry.focus()
+        
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X)
+        
+        def rename():
+            new_name = entry.get().strip()
+            if new_name and new_name != old_name:
+                dialog.destroy()
+                try:
+                    debug_log(f"\nDEBUG: Переименование файла на сервере")
+                    debug_log(f"DEBUG: Текущая директория: {self.ftp_client.get_current_directory()}")
+                    debug_log(f"DEBUG: Старое имя: {old_name}")
+                    debug_log(f"DEBUG: Новое имя: {new_name}")
+                    
+                    # Проверяем существование файла
+                    try:
+                        self.ftp_client.ftp.size(new_name)
+                        if not messagebox.askyesno("Подтверждение", 
+                                                 f"Файл {new_name} уже существует. Перезаписать?"):
+                            return
+                    except:
+                        pass  # Файл не существует, можно продолжать
+                    
+                    self.ftp_client.ftp.rename(old_name, new_name)
+                    self._refresh_remote_list()
+                    self.status_bar.set_status(f"Файл переименован: {old_name} -> {new_name}")
+                except Exception as e:
+                    error_msg = str(e)
+                    debug_log(f"DEBUG: Ошибка переименования: {error_msg}")
+                    self.status_bar.set_status(f"Ошибка переименования: {error_msg}", error=True)
+                    messagebox.showerror("Ошибка", f"Не удалось переименовать файл: {error_msg}")
+            elif not new_name:
+                messagebox.showwarning("Ошибка", "Имя файла не может быть пустым")
+        
+        ttk.Button(btn_frame, text="OK", command=rename, width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Отмена", command=dialog.destroy, width=10).pack(side=tk.LEFT)
+        
+        # Привязываем Enter к кнопке OK
+        dialog.bind('<Return>', lambda e: rename())
+        dialog.bind('<Escape>', lambda e: dialog.destroy())
 
     def _create_remote_dir(self):
         """Создание удаленной папки"""
@@ -542,90 +860,66 @@ class Application(tk.Tk):
         self.connection_history = self.connection_history[:10]
         self._save_connection_history()
 
-    def _connect(self, host: str, port: int, user: str, password: str):
+    def _connect(self, host, port, user, password):
+        """Подключение к FTP серверу"""
+        # Если все параметры None - это сигнал на отключение
         if host is None and port is None and user is None and password is None:
             self._disconnect()
-            return
+            return False
 
-        # Проверка пустых полей
-        if not host:
-            messagebox.showerror("Ошибка", "Поле 'Сервер' не может быть пустым")
-            return
-            
-        if not port:
-            messagebox.showerror("Ошибка", "Поле 'Порт' не может быть пустым")
-            return
-            
-        if not user:
-            messagebox.showerror("Ошибка", "Поле 'Пользователь' не может быть пустым")
-            return
-            
-        if not password:
-            messagebox.showerror("Ошибка", "Поле 'Пароль' не может быть пустым")
-            return
+        # Проверка входных данных
+        if not host or not user or not password:
+            messagebox.showerror("Ошибка", "Все поля должны быть заполнены")
+            return False
 
-        # Проверка корректности порта
+        # Проверка порта
         try:
             port = int(port)
             if port < 1 or port > 65535:
                 messagebox.showerror("Ошибка", "Порт должен быть числом от 1 до 65535")
-                return
-        except ValueError:
+                return False
+        except (ValueError, TypeError):
             messagebox.showerror("Ошибка", "Порт должен быть числом")
-            return
+            return False
 
         try:
-            # Сначала отключаемся, если есть активное подключение
-            if self.ftp_client.ftp:
-                self._disconnect()
-
             success, message = self.ftp_client.connect(host, port, user, password)
             if success:
                 self.status_bar.set_status("Подключено к серверу")
                 self.connection_panel.set_connected_state(True)
                 self.connection_menu.entryconfig("Отключиться", state="normal")
+                
+                # Сохраняем в историю
                 self._add_to_history(host, port, user)
-                self._refresh_remote_list()
-
+                
+                # Запускаем мониторинг соединения
                 self.stats_panel.start_monitoring(host, port)
                 self.ftp_client.start_connection_monitor(self._on_connection_lost)
-            else:
-                error_msg = "Ошибка подключения"
-                if "Connection refused" in message:
-                    error_msg = "Не удалось подключиться к серверу. Проверьте адрес и порт."
-                elif "Login incorrect" in message:
-                    error_msg = "Неверное имя пользователя или пароль"
-                elif "getaddrinfo failed" in message or "[Errno 8]" in message:
-                    error_msg = "Не удалось найти сервер. Проверьте правильность введенного адреса и подключение к интернету."
-                elif "Network is unreachable" in message:
-                    error_msg = "Сеть недоступна. Проверьте подключение к интернету."
-                elif "Connection timed out" in message:
-                    error_msg = "Превышено время ожидания подключения"
-                elif "nodename nor servname provided" in message:
-                    error_msg = "Не удалось найти сервер. Проверьте правильность введенного адреса."
-                elif "'NoneType' object has no attribute 'sendall'" in message:
-                    error_msg = "Ошибка подключения. Пожалуйста, попробуйте еще раз."
-                else:
-                    error_msg = f"Ошибка подключения: {message}"
                 
-                messagebox.showerror("Ошибка", error_msg)
+                # Обновляем списки
+                self._refresh_remote_list()
+                return True
+            else:
+                error_msg = message
+                if "530" in message:
+                    error_msg = "Неверное имя пользователя или пароль"
+                elif "connection refused" in message.lower():
+                    error_msg = "Подключение отклонено. Проверьте адрес и порт."
+                
                 self.status_bar.set_status(error_msg, error=True)
+                messagebox.showerror("Ошибка подключения", error_msg)
+                return False
                 
         except Exception as e:
             error_msg = str(e)
             if "timeout" in error_msg.lower():
                 error_msg = "Превышено время ожидания подключения"
             elif "connection refused" in error_msg.lower():
-                error_msg = "Не удалось подключиться к серверу. Проверьте адрес и порт."
-            elif "network is unreachable" in error_msg.lower():
-                error_msg = "Сеть недоступна. Проверьте подключение к интернету."
-            elif "[errno 8]" in error_msg.lower() or "nodename nor servname provided" in error_msg.lower():
-                error_msg = "Не удалось найти сервер. Проверьте правильность введенного адреса и подключение к интернету."
-            elif "'nonetype' object has no attribute 'sendall'" in error_msg.lower():
-                error_msg = "Ошибка подключения. Пожалуйста, попробуйте еще раз."
+                error_msg = "Подключение отклонено. Проверьте адрес и порт."
             
-            messagebox.showerror("Ошибка", error_msg)
             self.status_bar.set_status(error_msg, error=True)
+            messagebox.showerror("Ошибка подключения", error_msg)
+            return False
 
     def _disconnect(self):
         debug_log("\nDEBUG: Начало отключения от сервера")
@@ -658,11 +952,17 @@ class Application(tk.Tk):
             self.status_bar.set_status(f"Ошибка при отключении: {str(e)}", error=True)
 
     def _on_connection_lost(self):
-        self.schedule_update(lambda: [
-            self.status_bar.set_status("Связь с сервером потеряна", error=True),
-            messagebox.showwarning("Соединение", "Связь с сервером потеряна"),
-            self._disconnect()
-        ])
+        """Обработчик потери соединения"""
+        def update():
+            self.status_bar.set_status("Соединение потеряно", error=True)
+            self.connection_panel.set_connected_state(False)
+            self.connection_menu.entryconfig("Отключиться", state="disabled")
+            self.stats_panel.stop_monitoring()
+            self.remote_files.clear()
+            messagebox.showerror("Ошибка", "Соединение с сервером потеряно")
+            
+        # Используем schedule_update для безопасного обновления GUI из другого потока
+        self.schedule_update(update)
 
     def _refresh_lists(self):
         self._refresh_local_list()
@@ -1455,11 +1755,11 @@ class Application(tk.Tk):
         if not self.ftp_client.ftp:
             messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
             return
-
+            
         selected = self.remote_files.selection()
         if not selected:
             return
-
+            
         def download_thread():
             try:
                 total = len(selected)
@@ -1495,8 +1795,9 @@ class Application(tk.Tk):
                         try:
                             self.ftp_client.ftp.cwd(filename)
                             for item in self.ftp_client.list_files():
-                                name, _, type_, _ = item
-                                if type_ == "Файл":
+                                name = str(item[0])  # Явное преобразование имени в строку
+                                item_type = item[2]
+                                if item_type == "Файл":
                                     local_file = os.path.join(local_path, name)
                                     with open(local_file, 'wb') as f:
                                         self.ftp_client.ftp.retrbinary(f'RETR {name}', f.write)
@@ -1526,28 +1827,23 @@ class Application(tk.Tk):
         Thread(target=download_thread, daemon=True).start()
 
     def _delete_local(self):
-        """Удаление локального файла"""
+        """Удаление локальных файлов"""
         selected = self.local_files.selection()
         if not selected:
             return
             
-        if self.settings.get('confirm_delete', True):
-            if not messagebox.askyesno("Подтверждение", 
-                                     f"Удалить {len(selected)} выбранных элементов?"):
-                return
-        
         try:
             for item_id in selected:
                 values = self.local_files.item(item_id)['values']
                 filename = str(values[0])
                 path = os.path.join(self.settings.get('default_local_dir'), filename)
                 
-                if os.path.isdir(path):
-                    import shutil
-                    shutil.rmtree(path)
-                else:
-                    os.remove(path)
-            
+                if os.path.exists(path):
+                    if os.path.isdir(path):
+                        shutil.rmtree(path)
+                    else:
+                        os.remove(path)
+                        
             self._refresh_local_list()
             self.status_bar.set_status("Удаление завершено")
         except Exception as e:
@@ -1555,20 +1851,21 @@ class Application(tk.Tk):
             messagebox.showerror("Ошибка", f"Не удалось удалить файл(ы): {str(e)}")
 
     def _delete_remote(self):
-        """Удаление удаленного файла"""
+        """Удаление файлов на сервере"""
         if not self.ftp_client.ftp:
-            messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
             return
-
+            
         selected = self.remote_files.selection()
         if not selected:
             return
-
-        if self.settings.get('confirm_delete', True):
-            if not messagebox.askyesno("Подтверждение", 
-                                     f"Удалить {len(selected)} выбранных элементов?"):
-                return
-
+            
+        confirm = messagebox.askyesno(
+            "Подтверждение",
+            "Вы действительно хотите удалить выбранные файлы с сервера?"
+        )
+        if not confirm:
+            return
+            
         try:
             for item_id in selected:
                 values = self.remote_files.item(item_id)['values']
@@ -1576,10 +1873,18 @@ class Application(tk.Tk):
                 is_dir = values[2] == "Папка"
                 
                 if is_dir:
-                    self.ftp_client.delete_directory_recursive(filename)
+                    success, message = self.ftp_client.delete_directory_recursive(filename)
                 else:
-                    self.ftp_client.ftp.delete(filename)
-
+                    success, message = self.ftp_client.delete_item(filename)
+                    
+                if not success:
+                    if message == "NOT_EMPTY_DIR":
+                        if messagebox.askyesno("Подтверждение", 
+                                             f"Папка '{filename}' не пуста. Удалить её содержимое?"):
+                            success, message = self.ftp_client.delete_directory_recursive(filename)
+                    if not success:  # Если все еще неуспешно
+                        messagebox.showerror("Ошибка", f"Не удалось удалить {filename}: {message}")
+                    
             self._refresh_remote_list()
             self.status_bar.set_status("Удаление завершено")
         except Exception as e:

@@ -287,7 +287,7 @@ class FTPClient:
                 return False, "Пустое имя"
 
             debug_log(f"\nDEBUG: Начинаем удаление элемента {name}")
-            
+
             with self.ftp_lock:
                 current_dir = self.ftp.pwd()
                 debug_log(f"DEBUG: Текущая директория: {current_dir}")
@@ -350,13 +350,13 @@ class FTPClient:
             return False, "Нет подключения"
 
         debug_log(f"\nDEBUG: Начинаем удаление директории {dirname}")
-        
+
         try:
             with self.ftp_lock:
                 # Сохраняем текущую директорию
                 current_dir = self.ftp.pwd()
                 debug_log(f"DEBUG: Текущая директория: {current_dir}")
-
+                
                 # Переходим в удаляемую директорию
                 try:
                     debug_log(f"DEBUG: Пытаемся перейти в директорию {dirname}")
@@ -455,7 +455,7 @@ class FTPClient:
                     if "550" in error_msg:
                         debug_log("DEBUG: Ошибка 550 - возможно, директория не пуста или нет прав")
                     return False, f"Не удалось удалить директорию {dirname}: {error_msg}"
-
+                    
         except Exception as e:
             debug_log(f"DEBUG: Критическая ошибка: {str(e)}")
             return False, str(e)
@@ -564,3 +564,119 @@ class FTPClient:
         if self.monitor_thread:
             self.monitor_thread.join(timeout=1)
             self.monitor_thread = None
+
+    def copy_file(self, source: str, destination: str) -> Tuple[bool, str]:
+        """Копирование файла на FTP сервере"""
+        if not self.ftp:
+            return False, "Нет подключения"
+
+        debug_log(f"\nDEBUG: Начинаем копирование файла {source} -> {destination}")
+        
+        try:
+            with self.ftp_lock:
+                # Проверяем, является ли источник директорией
+                try:
+                    current_dir = self.ftp.pwd()
+                    self.ftp.cwd(source)
+                    self.ftp.cwd(current_dir)
+                    # Если мы здесь, значит source - это директория
+                    debug_log("DEBUG: Источник является директорией")
+                    return self.copy_directory(source, destination)
+                except:
+                    # Если не удалось перейти, значит это файл
+                    debug_log("DEBUG: Источник является файлом")
+                    pass
+
+                # Создаем временный файл для скачивания
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                    temp_path = temp_file.name
+                    debug_log(f"DEBUG: Создан временный файл: {temp_path}")
+
+                try:
+                    # Скачиваем исходный файл
+                    debug_log(f"DEBUG: Скачиваем файл {source}")
+                    self.ftp.retrbinary(f'RETR {source}', temp_file.write)
+                    temp_file.close()
+
+                    # Загружаем файл с новым именем
+                    debug_log(f"DEBUG: Загружаем файл как {destination}")
+                    with open(temp_path, 'rb') as f:
+                        self.ftp.storbinary(f'STOR {destination}', f)
+
+                    debug_log("DEBUG: Копирование успешно завершено")
+                    return True, "Файл успешно скопирован"
+                finally:
+                    # Удаляем временный файл
+                    try:
+                        os.unlink(temp_path)
+                        debug_log("DEBUG: Временный файл удален")
+                    except:
+                        pass
+
+        except Exception as e:
+            error_msg = str(e)
+            debug_log(f"DEBUG: Ошибка копирования: {error_msg}")
+            return False, f"Ошибка копирования файла: {error_msg}"
+
+    def copy_directory(self, source: str, destination: str) -> Tuple[bool, str]:
+        """Копирование директории на FTP сервере"""
+        if not self.ftp:
+            return False, "Нет подключения"
+
+        debug_log(f"\nDEBUG: Начинаем копирование директории {source} -> {destination}")
+        
+        try:
+            with self.ftp_lock:
+                current_dir = self.ftp.pwd()
+                
+                # Создаем новую директорию
+                try:
+                    debug_log(f"DEBUG: Создаем директорию {destination}")
+                    self.ftp.mkd(destination)
+                except:
+                    pass
+
+                # Переходим в исходную директорию
+                self.ftp.cwd(source)
+                source_path = self.ftp.pwd()
+                
+                # Получаем список файлов
+                items = []
+                self.ftp.retrlines('LIST', items.append)
+                
+                # Возвращаемся в исходную директорию
+                self.ftp.cwd(current_dir)
+                
+                # Копируем каждый элемент
+                for item in items:
+                    parts = item.split(maxsplit=8)
+                    if len(parts) < 9:
+                        continue
+                        
+                    name = parts[8]
+                    if name in ('.', '..'):
+                        continue
+                        
+                    is_dir = item.startswith('d')
+                    source_item = f"{source}/{name}"
+                    dest_item = f"{destination}/{name}"
+                    
+                    if is_dir:
+                        debug_log(f"DEBUG: Копируем поддиректорию {name}")
+                        success, message = self.copy_directory(source_item, dest_item)
+                        if not success:
+                            return False, message
+                    else:
+                        debug_log(f"DEBUG: Копируем файл {name}")
+                        success, message = self.copy_file(source_item, dest_item)
+                        if not success:
+                            return False, message
+
+                debug_log("DEBUG: Копирование директории успешно завершено")
+                return True, "Директория успешно скопирована"
+
+        except Exception as e:
+            error_msg = str(e)
+            debug_log(f"DEBUG: Ошибка копирования директории: {error_msg}")
+            return False, f"Ошибка копирования директории: {error_msg}"

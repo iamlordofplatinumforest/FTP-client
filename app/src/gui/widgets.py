@@ -150,8 +150,10 @@ class ConnectionPanel(ttk.LabelFrame):
 
     def _on_button_click(self) -> None:
         if self._is_connected:
+            # Если мы подключены, просто вызываем отключение
             if self._on_connect_callback:
                 self._on_connect_callback(None, None, None, None)
+                return
         else:
             # Получаем значения полей
             host = self.entries["host"].get().strip()
@@ -161,24 +163,29 @@ class ConnectionPanel(ttk.LabelFrame):
 
             # Базовая валидация
             if not host:
+                messagebox.showerror("Ошибка", "Поле 'Сервер' не может быть пустым")
                 self.entries["host"].focus()
                 return
                 
             if not port:
+                messagebox.showerror("Ошибка", "Поле 'Порт' не может быть пустым")
                 self.entries["port"].focus()
                 return
                 
             if not user:
+                messagebox.showerror("Ошибка", "Поле 'Пользователь' не может быть пустым")
                 self.entries["user"].focus()
                 return
                 
             if not password:
+                messagebox.showerror("Ошибка", "Поле 'Пароль' не может быть пустым")
                 self.password_entry.focus()
                 return
 
             try:
                 port = int(port)
             except ValueError:
+                messagebox.showerror("Ошибка", "Порт должен быть числом")
                 self.entries["port"].focus()
                 return
 
