@@ -153,13 +153,37 @@ class ConnectionPanel(ttk.LabelFrame):
             if self._on_connect_callback:
                 self._on_connect_callback(None, None, None, None)
         else:
+            # Получаем значения полей
+            host = self.entries["host"].get().strip()
+            port = self.entries["port"].get().strip()
+            user = self.entries["user"].get().strip()
+            password = self.password_entry.get()
+
+            # Базовая валидация
+            if not host:
+                self.entries["host"].focus()
+                return
+                
+            if not port:
+                self.entries["port"].focus()
+                return
+                
+            if not user:
+                self.entries["user"].focus()
+                return
+                
+            if not password:
+                self.password_entry.focus()
+                return
+
+            try:
+                port = int(port)
+            except ValueError:
+                self.entries["port"].focus()
+                return
+
             if self._on_connect_callback:
-                self._on_connect_callback(
-                    self.entries["host"].get(),
-                    int(self.entries["port"].get()),
-                    self.entries["user"].get(),
-                    self.password_entry.get()
-                )
+                self._on_connect_callback(host, port, user, password)
 
     def _toggle_password_visibility(self) -> None:
         if self.show_password.get():

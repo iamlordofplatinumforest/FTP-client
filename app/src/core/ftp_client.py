@@ -29,11 +29,19 @@ class FTPClient:
         self.remote_cache = {}
 
     def connect(self, host: str, port: int, user: str, password: str) -> Tuple[bool, str]:
+        debug_log("\nDEBUG: FTPClient: Начало подключения")
         try:
             with self.ftp_lock:
+                # Если есть активное подключение, сначала отключаемся
                 if self.ftp:
-                    self.ftp.quit()
+                    debug_log("DEBUG: FTPClient: Закрываем предыдущее подключение")
+                    try:
+                        self.ftp.quit()
+                    except:
+                        pass
+                    self.ftp = None
 
+                debug_log("DEBUG: FTPClient: Создаем новое подключение")
                 self.ftp = FTP()
                 self.ftp.connect(host, port)
                 self.ftp.login(user, password)
@@ -46,8 +54,13 @@ class FTPClient:
                     'password': password
                 }
 
+                debug_log("DEBUG: FTPClient: Подключение успешно установлено")
                 return True, "Успешное подключение"
         except Exception as e:
+            debug_log(f"DEBUG: FTPClient: Ошибка подключения: {str(e)}")
+            # Очищаем объект FTP при ошибке
+            self.ftp = None
+            self.connection_params = None
             return False, str(e)
 
     def reconnect(self) -> Tuple[bool, str]:
@@ -70,6 +83,7 @@ class FTPClient:
                 finally:
                     debug_log("DEBUG: FTPClient: Очищаем объект FTP")
                     self.ftp = None
+                    self.connection_params = None
                     debug_log("DEBUG: FTPClient: Отключение завершено")
 
     def _get_file_list(self) -> List[Tuple[str, bool]]:

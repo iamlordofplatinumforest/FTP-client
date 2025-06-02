@@ -289,18 +289,85 @@ class Application(tk.Tk):
             self._disconnect()
             return
 
-        success, message = self.ftp_client.connect(host, port, user, password)
-        if success:
-            self.status_bar.set_status("Подключено к серверу")
-            self.connection_panel.set_connected_state(True)
-            self.connection_menu.entryconfig("Отключиться", state="normal")
-            self._add_to_history(host, port, user)
-            self._refresh_remote_list()
+        # Проверка пустых полей
+        if not host:
+            messagebox.showerror("Ошибка", "Поле 'Сервер' не может быть пустым")
+            return
+            
+        if not port:
+            messagebox.showerror("Ошибка", "Поле 'Порт' не может быть пустым")
+            return
+            
+        if not user:
+            messagebox.showerror("Ошибка", "Поле 'Пользователь' не может быть пустым")
+            return
+            
+        if not password:
+            messagebox.showerror("Ошибка", "Поле 'Пароль' не может быть пустым")
+            return
 
-            self.stats_panel.start_monitoring(host, port)
-            self.ftp_client.start_connection_monitor(self._on_connection_lost)
-        else:
-            self.status_bar.set_status(f"Ошибка подключения: {message}", error=True)
+        # Проверка корректности порта
+        try:
+            port = int(port)
+            if port < 1 or port > 65535:
+                messagebox.showerror("Ошибка", "Порт должен быть числом от 1 до 65535")
+                return
+        except ValueError:
+            messagebox.showerror("Ошибка", "Порт должен быть числом")
+            return
+
+        try:
+            # Сначала отключаемся, если есть активное подключение
+            if self.ftp_client.ftp:
+                self._disconnect()
+
+            success, message = self.ftp_client.connect(host, port, user, password)
+            if success:
+                self.status_bar.set_status("Подключено к серверу")
+                self.connection_panel.set_connected_state(True)
+                self.connection_menu.entryconfig("Отключиться", state="normal")
+                self._add_to_history(host, port, user)
+                self._refresh_remote_list()
+
+                self.stats_panel.start_monitoring(host, port)
+                self.ftp_client.start_connection_monitor(self._on_connection_lost)
+            else:
+                error_msg = "Ошибка подключения"
+                if "Connection refused" in message:
+                    error_msg = "Не удалось подключиться к серверу. Проверьте адрес и порт."
+                elif "Login incorrect" in message:
+                    error_msg = "Неверное имя пользователя или пароль"
+                elif "getaddrinfo failed" in message or "[Errno 8]" in message:
+                    error_msg = "Не удалось найти сервер. Проверьте правильность введенного адреса и подключение к интернету."
+                elif "Network is unreachable" in message:
+                    error_msg = "Сеть недоступна. Проверьте подключение к интернету."
+                elif "Connection timed out" in message:
+                    error_msg = "Превышено время ожидания подключения"
+                elif "nodename nor servname provided" in message:
+                    error_msg = "Не удалось найти сервер. Проверьте правильность введенного адреса."
+                elif "'NoneType' object has no attribute 'sendall'" in message:
+                    error_msg = "Ошибка подключения. Пожалуйста, попробуйте еще раз."
+                else:
+                    error_msg = f"Ошибка подключения: {message}"
+                
+                messagebox.showerror("Ошибка", error_msg)
+                self.status_bar.set_status(error_msg, error=True)
+                
+        except Exception as e:
+            error_msg = str(e)
+            if "timeout" in error_msg.lower():
+                error_msg = "Превышено время ожидания подключения"
+            elif "connection refused" in error_msg.lower():
+                error_msg = "Не удалось подключиться к серверу. Проверьте адрес и порт."
+            elif "network is unreachable" in error_msg.lower():
+                error_msg = "Сеть недоступна. Проверьте подключение к интернету."
+            elif "[errno 8]" in error_msg.lower() or "nodename nor servname provided" in error_msg.lower():
+                error_msg = "Не удалось найти сервер. Проверьте правильность введенного адреса и подключение к интернету."
+            elif "'nonetype' object has no attribute 'sendall'" in error_msg.lower():
+                error_msg = "Ошибка подключения. Пожалуйста, попробуйте еще раз."
+            
+            messagebox.showerror("Ошибка", error_msg)
+            self.status_bar.set_status(error_msg, error=True)
 
     def _disconnect(self):
         debug_log("\nDEBUG: Начало отключения от сервера")
