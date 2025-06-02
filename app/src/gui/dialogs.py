@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import Callable, Dict, List, Tuple
 from datetime import datetime
+import sys
 
 
 class QuickConnectDialog:
@@ -222,33 +223,84 @@ class AboutDialog:
     def __init__(self, parent):
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("О программе")
-        self.dialog.geometry("400x300")
+        self.dialog.geometry("600x500")
         self.dialog.transient(parent)
         self.dialog.grab_set()
 
+        # Центрируем окно
         self.dialog.geometry("+%d+%d" % (
-            parent.winfo_rootx() + parent.winfo_width()//2 - 200,
-            parent.winfo_rooty() + parent.winfo_height()//2 - 150
+            parent.winfo_rootx() + parent.winfo_width()//2 - 300,
+            parent.winfo_rooty() + parent.winfo_height()//2 - 250
         ))
 
-        frame = ttk.Frame(self.dialog, padding="20")
-        frame.pack(fill=tk.BOTH, expand=True)
+        main_frame = ttk.Frame(self.dialog, padding="20")
+        main_frame.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(frame, text="FTP Клиент", 
-                 font=('Helvetica', 16, 'bold')).pack(pady=10)
+        # Заголовок
+        title_label = ttk.Label(main_frame, 
+                              text="FTP Клиент",
+                              font=('Helvetica', 16, 'bold'))
+        title_label.pack(pady=(0, 10))
+
+        # Версия
+        version_label = ttk.Label(main_frame,
+                                text="Версия 1.0.0")
+        version_label.pack(pady=(0, 20))
+
+        dev_label = ttk.Label(main_frame,
+                                  text="Ефросинья Сологуб, 2025 год")
+        dev_label.pack(pady=(0, 20))
+
+        # Создаем notebook для вкладок
+        notebook = ttk.Notebook(main_frame)
+        notebook.pack(fill=tk.BOTH, expand=True)
+
+        # Вкладка с описанием
+        desc_frame = ttk.Frame(notebook, padding="10")
+        notebook.add(desc_frame, text="Описание")
+
+        description = """
+        FTP клиент с графическим интерфейсом, поддерживающий:
+        • Передачу файлов между локальной и удаленной системами
+        • Работу с папками и вложенными структурами
+        • Drag and Drop для перетаскивания файлов
+        • Закладки и историю подключений
+        • Поиск по файлам
+        • Мониторинг состояния соединения
+        """
+        desc_label = ttk.Label(desc_frame, text=description, justify=tk.LEFT)
+        desc_label.pack(anchor=tk.W)
+
+        # Вкладка с горячими клавишами
+        keys_frame = ttk.Frame(notebook, padding="10")
+        notebook.add(keys_frame, text="Горячие клавиши")
+
+        # Определяем модификатор в зависимости от системы
+        mod = "⌘" if sys.platform == 'darwin' else "Ctrl"
+
+        hotkeys = f"""
+        Основные команды:
+        • {mod}+H - История подключений
+        • {mod}+B - Добавить в закладки
+        • {mod}+N - Создать папку
+        • {mod}+U - Загрузить файлы
+        • {mod}+D - Скачать файлы
+        • {mod}+R или F5 - Обновить списки
+        • {mod}+, - Настройки
+        • {mod}+Q - Выход
         
-        ttk.Label(frame, text="Версия 1.0", 
-                 font=('Helvetica', 12)).pack()
+        Навигация:
+        • Delete - Переход в родительскую директорию
+        • Escape - Выход из полноэкранного режима
         
-        ttk.Label(frame, text="Программа для работы с FTP-серверами\n" +
-                            "Поддерживает основные операции с файлами,\n" +
-                            "закладки и историю подключений.", 
-                 justify=tk.CENTER, font=('Helvetica', 14)).pack(pady=10)
+        Перетаскивание:
+        • Перетащите файлы между панелями для копирования
+        """
+        keys_label = ttk.Label(keys_frame, text=hotkeys, justify=tk.LEFT)
+        keys_label.pack(anchor=tk.W)
 
-        ttk.Label(frame, text="Ефросинья Сологуб, 2025",
-                  font=('Helvetica', 14, 'bold')).pack()
-
-
+        # Кнопка закрытия
+        ttk.Button(main_frame, 
+                  text="Закрыть",
+                  command=self.dialog.destroy).pack(pady=(20, 0))
         
-        ttk.Button(frame, text="Закрыть", 
-                  command=self.dialog.destroy).pack(pady=10) 
