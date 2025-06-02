@@ -14,6 +14,7 @@ import re
 from typing import Dict, List, Tuple
 import base64
 import sys
+import threading
 
 from src.core.ftp_client import FTPClient
 from src.core.settings import Settings
@@ -984,7 +985,77 @@ class Application(tk.Tk):
         except Exception as e:
             self.status_bar.set_status(f"Ошибка скачивания: {e}", error=True)
 
+    def _delete_remote(self):
+        """Удаление удаленных файлов"""
+        debug_log("\nDEBUG: Начало функции _delete_remote")
+        
+        if not self.ftp_client.ftp:
+            debug_log("DEBUG: FTP клиент не подключен")
+            messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
+            return
+
+        selected = self.remote_files.selection()
+        if not selected:
+            debug_log("DEBUG: Не выбраны элементы для удаления")
+            messagebox.showwarning("Ошибка", "Выберите файл для удаления")
+            return
+
+        if self.settings.get('confirm_delete', True):
+            if not messagebox.askyesno("Подтверждение", 
+                                     f"Удалить {len(selected)} выбранных элементов?"):
+                return
+
+        def delete_in_thread():
+            try:
+                total = len(selected)
+                for i, item_id in enumerate(selected, 1):
+                    values = self.remote_files.item(item_id)['values']
+                    filename = str(values[0])
+                    is_dir = values[2] == "Папка"
+
+                    debug_log(f"\nDEBUG: Удаление элемента: {filename} ({'папка' if is_dir else 'файл'})")
+                    
+                    # Обновляем прогресс
+                    progress = (i - 1) / total * 100
+                    self.schedule_update(lambda p=progress, f=filename: [
+                        self.status_bar.set_progress(p),
+                        self.status_bar.set_status(f"Удаление {i}/{total}: {f}")
+                    ])
+                    
+                    success, message = self.ftp_client.delete_item(filename)
+                    
+                    if not success and message == "NOT_EMPTY_DIR":
+                        debug_log("DEBUG: Папка не пуста, запускаем рекурсивное удаление")
+                        success, message = self.ftp_client.delete_directory_recursive(filename)
+                    
+                    if not success:
+                        debug_log(f"DEBUG: Ошибка удаления: {message}")
+                        self.schedule_update(lambda: [
+                            messagebox.showerror("Ошибка", f"Ошибка удаления {filename}: {message}"),
+                            self.status_bar.set_status(f"Ошибка удаления: {message}", error=True)
+                        ])
+                        return
+
+                # Обновляем список файлов и статус
+                self.schedule_update(lambda: [
+                    self._refresh_remote_list(),
+                    self.status_bar.set_status("Удаление завершено"),
+                    self.status_bar.set_progress(100)
+                ])
+
+            except Exception as e:
+                error_msg = str(e)
+                debug_log(f"DEBUG: Исключение при удалении: {error_msg}")
+                self.schedule_update(lambda: [
+                    messagebox.showerror("Ошибка", f"Ошибка удаления: {error_msg}"),
+                    self.status_bar.set_status(f"Ошибка удаления: {error_msg}", error=True)
+                ])
+
+        # Запускаем удаление в отдельном потоке
+        Thread(target=delete_in_thread, daemon=True).start()
+
     def _delete_selected(self):
+        """Обработчик удаления выбранных элементов"""
         if self.local_files.focus():
             selected = self.local_files.selection()
             if not selected:
@@ -1013,30 +1084,7 @@ class Application(tk.Tk):
                 self.status_bar.set_status("Ошибка удаления: {}".format(str(e)), error=True)
 
         elif self.remote_files.focus() and self.ftp_client.ftp:
-            selected = self.remote_files.selection()
-            if not selected:
-                return
-            if self.settings.get('confirm_delete', True):
-                if not messagebox.askyesno("Подтверждение", 
-                                         "Удалить {} выбранных элементов?".format(len(selected))):
-                    return
-
-            try:
-                for item_id in selected:
-                    values = self.remote_files.item(item_id)['values']
-                    filename = str(values[0])
-                    is_dir = values[2] == "Папка"
-
-                    if is_dir:
-                        self.ftp_client.ftp.rmd(filename)
-                    else:
-                        self.ftp_client.ftp.delete(filename)
-
-                self._refresh_remote_list()
-                self.status_bar.set_status("Удаление завершено")
-
-            except Exception as e:
-                self.status_bar.set_status("Ошибка удаления: {}".format(str(e)), error=True)
+            self._delete_remote()
 
     def _on_local_double_click(self, event):
         item = self.local_files.identify('item', event.x, event.y)
@@ -1178,52 +1226,6 @@ class Application(tk.Tk):
     def _rename_remote(self):
         """Переименование удаленного файла"""
         # TODO: Реализовать переименование
-
-    def _delete_remote(self):
-        debug_log("\nDEBUG: Начало функции _delete_remote")
-        
-        if not self.ftp_client.ftp:
-            debug_log("DEBUG: FTP клиент не подключен")
-            messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
-            return
-
-        selected = self.remote_files.selection()
-        if not selected:
-            debug_log("DEBUG: Не выбраны элементы для удаления")
-            messagebox.showwarning("Ошибка", "Выберите файл для удаления")
-            return
-
-        filename = self.remote_files.item(selected[0], 'values')[0]
-        is_dir = self.remote_files.item(selected[0], 'values')[2] == "Папка"
-
-        debug_log(f"DEBUG: Выбран для удаления: {filename} ({'папка' if is_dir else 'файл'})")
-
-        if not self.settings.get('confirm_delete', True) or \
-           messagebox.askyesno("Подтверждение", f"Удалить {filename}?"):
-            try:
-                debug_log(f"DEBUG: Вызываем метод delete_item для {filename}")
-                success, message = self.ftp_client.delete_item(filename)
-                debug_log(f"DEBUG: Результат удаления: success={success}, message={message}")
-                
-                # Если папка не пуста, спрашиваем подтверждение на рекурсивное удаление
-                if not success and message == "NOT_EMPTY_DIR":
-                    if messagebox.askyesno("Подтверждение", 
-                                         f"Папка '{filename}' не пуста. Удалить со всем содержимым?"):
-                        success, message = self.ftp_client.delete_directory_recursive(filename)
-                
-                if success:
-                    debug_log("DEBUG: Удаление успешно, обновляем список файлов")
-                    self._refresh_remote_list()
-                    self.status_bar.set_status(f"Удален: {filename}")
-                else:
-                    debug_log(f"DEBUG: Ошибка удаления: {message}")
-                    messagebox.showerror("Ошибка", f"Ошибка удаления: {message}")
-                    self.status_bar.set_status(f"Ошибка удаления: {message}", error=True)
-            except Exception as e:
-                error_msg = str(e)
-                debug_log(f"DEBUG: Исключение при удалении: {error_msg}")
-                messagebox.showerror("Ошибка", f"Ошибка удаления: {error_msg}")
-                self.status_bar.set_status(f"Ошибка удаления: {error_msg}", error=True)
 
     def _create_remote_dir(self):
         if not self.ftp_client.ftp:
