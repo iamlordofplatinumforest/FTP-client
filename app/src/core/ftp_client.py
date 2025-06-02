@@ -587,32 +587,31 @@ class FTPClient:
                     debug_log("DEBUG: Источник является файлом")
                     pass
 
-                # Создаем временный файл для скачивания
+                # Создаем временный файл для копирования
                 import tempfile
                 with tempfile.NamedTemporaryFile(delete=False) as temp_file:
                     temp_path = temp_file.name
                     debug_log(f"DEBUG: Создан временный файл: {temp_path}")
-
-                try:
-                    # Скачиваем исходный файл
-                    debug_log(f"DEBUG: Скачиваем файл {source}")
-                    self.ftp.retrbinary(f'RETR {source}', temp_file.write)
-                    temp_file.close()
-
-                    # Загружаем файл с новым именем
-                    debug_log(f"DEBUG: Загружаем файл как {destination}")
-                    with open(temp_path, 'rb') as f:
-                        self.ftp.storbinary(f'STOR {destination}', f)
-
-                    debug_log("DEBUG: Копирование успешно завершено")
-                    return True, "Файл успешно скопирован"
-                finally:
-                    # Удаляем временный файл
+                    
                     try:
-                        os.unlink(temp_path)
-                        debug_log("DEBUG: Временный файл удален")
-                    except:
-                        pass
+                        # Скачиваем исходный файл
+                        debug_log(f"DEBUG: Скачиваем файл {source}")
+                        self.ftp.retrbinary(f'RETR {source}', temp_file.write)
+                        temp_file.close()  # Закрываем файл после записи
+                        
+                        # Загружаем файл с новым именем
+                        debug_log(f"DEBUG: Загружаем файл как {destination}")
+                        with open(temp_path, 'rb') as f:
+                            self.ftp.storbinary(f'STOR {destination}', f)
+                        
+                        debug_log("DEBUG: Копирование успешно завершено")
+                        return True, "Файл успешно скопирован"
+                    finally:
+                        try:
+                            os.unlink(temp_path)
+                            debug_log("DEBUG: Временный файл удален")
+                        except:
+                            pass
 
         except Exception as e:
             error_msg = str(e)
@@ -635,46 +634,90 @@ class FTPClient:
                     debug_log(f"DEBUG: Создаем директорию {destination}")
                     self.ftp.mkd(destination)
                 except:
+                    debug_log("DEBUG: Директория назначения уже существует или ошибка создания")
                     pass
 
-                # Переходим в исходную директорию
-                self.ftp.cwd(source)
-                source_path = self.ftp.pwd()
-                
-                # Получаем список файлов
-                items = []
-                self.ftp.retrlines('LIST', items.append)
-                
-                # Возвращаемся в исходную директорию
-                self.ftp.cwd(current_dir)
-                
-                # Копируем каждый элемент
-                for item in items:
-                    parts = item.split(maxsplit=8)
-                    if len(parts) < 9:
-                        continue
-                        
-                    name = parts[8]
-                    if name in ('.', '..'):
-                        continue
-                        
-                    is_dir = item.startswith('d')
-                    source_item = f"{source}/{name}"
-                    dest_item = f"{destination}/{name}"
+                try:
+                    # Переходим в исходную директорию
+                    debug_log(f"DEBUG: Переходим в исходную директорию {source}")
+                    self.ftp.cwd(source)
+                    source_dir = self.ftp.pwd()
                     
-                    if is_dir:
-                        debug_log(f"DEBUG: Копируем поддиректорию {name}")
-                        success, message = self.copy_directory(source_item, dest_item)
-                        if not success:
-                            return False, message
-                    else:
-                        debug_log(f"DEBUG: Копируем файл {name}")
-                        success, message = self.copy_file(source_item, dest_item)
-                        if not success:
-                            return False, message
-
-                debug_log("DEBUG: Копирование директории успешно завершено")
-                return True, "Директория успешно скопирована"
+                    # Получаем список файлов в исходной директории
+                    items = []
+                    def list_callback(line):
+                        items.append(line)
+                    self.ftp.retrlines('LIST', list_callback)
+                    debug_log(f"DEBUG: Получен список файлов: {len(items)} элементов")
+                    
+                    # Возвращаемся в исходную директорию и переходим в целевую
+                    self.ftp.cwd(current_dir)
+                    self.ftp.cwd(destination)
+                    dest_dir = self.ftp.pwd()
+                    
+                    # Копируем каждый элемент
+                    for item in items:
+                        parts = item.split(maxsplit=8)
+                        if len(parts) < 9:
+                            continue
+                            
+                        name = parts[8]
+                        if name in ('.', '..'):
+                            continue
+                            
+                        is_dir = item.startswith('d')
+                        
+                        if is_dir:
+                            debug_log(f"DEBUG: Копируем поддиректорию {name}")
+                            # Создаем поддиректорию
+                            try:
+                                self.ftp.mkd(name)
+                            except:
+                                pass
+                            
+                            # Рекурсивно копируем содержимое
+                            self.ftp.cwd(source_dir)  # Возвращаемся в исходную директорию
+                            success, message = self.copy_directory(f"{source}/{name}", f"{destination}/{name}")
+                            if not success:
+                                debug_log(f"DEBUG: Ошибка копирования поддиректории: {message}")
+                                return False, f"Ошибка копирования поддиректории {name}: {message}"
+                            self.ftp.cwd(dest_dir)  # Возвращаемся в целевую директорию
+                        else:
+                            debug_log(f"DEBUG: Копируем файл {name}")
+                            # Создаем временный файл для копирования
+                            import tempfile
+                            with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                                temp_path = temp_file.name
+                                debug_log(f"DEBUG: Создан временный файл: {temp_path}")
+                                
+                                try:
+                                    # Скачиваем файл из исходной директории
+                                    self.ftp.cwd(source_dir)
+                                    self.ftp.retrbinary(f'RETR {name}', temp_file.write)
+                                    temp_file.close()
+                                    
+                                    # Загружаем файл в целевую директорию
+                                    self.ftp.cwd(dest_dir)
+                                    with open(temp_path, 'rb') as f:
+                                        self.ftp.storbinary(f'STOR {name}', f)
+                                        
+                                    debug_log(f"DEBUG: Файл {name} успешно скопирован")
+                                finally:
+                                    try:
+                                        os.unlink(temp_path)
+                                        debug_log("DEBUG: Временный файл удален")
+                                    except:
+                                        pass
+                    
+                    debug_log("DEBUG: Копирование директории успешно завершено")
+                    return True, "Директория успешно скопирована"
+                    
+                finally:
+                    # Возвращаемся в исходную директорию
+                    try:
+                        self.ftp.cwd(current_dir)
+                    except:
+                        pass
 
         except Exception as e:
             error_msg = str(e)

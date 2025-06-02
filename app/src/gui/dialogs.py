@@ -263,7 +263,6 @@ class AboutDialog:
         FTP клиент с графическим интерфейсом, поддерживающий:
         • Передачу файлов между локальной и удаленной системами
         • Работу с папками и вложенными структурами
-        • Drag and Drop для перетаскивания файлов
         • Закладки и историю подключений
         • Поиск по файлам
         • Мониторинг состояния соединения
@@ -271,11 +270,9 @@ class AboutDialog:
         desc_label = ttk.Label(desc_frame, text=description, justify=tk.LEFT)
         desc_label.pack(anchor=tk.W)
 
-        # Вкладка с горячими клавишами
         keys_frame = ttk.Frame(notebook, padding="10")
         notebook.add(keys_frame, text="Горячие клавиши")
 
-        # Определяем модификатор в зависимости от системы
         mod = "⌘" if sys.platform == 'darwin' else "Ctrl"
 
         hotkeys = f"""
@@ -290,16 +287,14 @@ class AboutDialog:
         • {mod}+Q - Выход
         
         Навигация:
-        • Delete - Переход в родительскую директорию
+        • Delete - Удаление выбранного файла
         • Escape - Выход из полноэкранного режима
         
-        Перетаскивание:
-        • Перетащите файлы между панелями для копирования
+        Enter - Подтверждение действия
         """
         keys_label = ttk.Label(keys_frame, text=hotkeys, justify=tk.LEFT)
         keys_label.pack(anchor=tk.W)
 
-        # Кнопка закрытия
         ttk.Button(main_frame, 
                   text="Закрыть",
                   command=self.dialog.destroy).pack(pady=(20, 0))

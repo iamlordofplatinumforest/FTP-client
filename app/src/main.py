@@ -15,7 +15,7 @@ from typing import Dict, List, Tuple
 import base64
 import sys
 import threading
-import shutil  # Добавляем импорт shutil
+import shutil
 
 from src.core.ftp_client import FTPClient
 from src.core.settings import Settings
@@ -48,7 +48,7 @@ class Application(tk.Tk):
             self.attributes('-fullscreen', True)
         elif sys.platform == 'win32':
             self.state('zoomed')
-        else:  # Linux
+        else:
             self.attributes('-zoomed', True)
 
         self.settings = Settings()
@@ -77,51 +77,85 @@ class Application(tk.Tk):
         menubar = tk.Menu(self)
         connection_menu = tk.Menu(menubar, tearoff=False)
         menubar.add_cascade(label="Подключение", menu=connection_menu)
-        connection_menu.add_command(label="Быстрое подключение", 
+
+        if sys.platform == 'darwin':
+            menu_width = 25
+            cmd_symbol = "⌘"
+        else:
+            menu_width = 30
+            cmd_symbol = "Ctrl+"
+            
+        connection_menu.config(postcommand=lambda: self._adjust_menu_width(connection_menu))
+        connection_menu.add_command(label="Быстрое подключение".ljust(menu_width), 
                                   command=self._show_quick_connect,
                                   accelerator="⌘Q" if sys.platform == 'darwin' else "Ctrl+Q")
-        connection_menu.add_command(label="История подключений", 
+        connection_menu.add_command(label="История подключений".ljust(menu_width), 
                                   command=self._show_connection_history,
                                   accelerator="⌘H" if sys.platform == 'darwin' else "Ctrl+H")
-        connection_menu.add_command(label="Закладки", 
+        connection_menu.add_command(label="Закладки".ljust(menu_width), 
                                   command=self._show_bookmarks)
-        connection_menu.add_command(label="Добавить в закладки", 
+        connection_menu.add_command(label="Добавить в закладки".ljust(menu_width), 
                                   command=self._add_bookmark,
                                   accelerator="⌘B" if sys.platform == 'darwin' else "Ctrl+B")
         connection_menu.add_separator()
-        connection_menu.add_command(label="Отключиться", 
+        connection_menu.add_command(label="Отключиться".ljust(menu_width), 
                                   command=self._disconnect,
                                   state="disabled")
         self.connection_menu = connection_menu
 
         operations_menu = tk.Menu(menubar, tearoff=False)
+        operations_menu.config(postcommand=lambda: self._adjust_menu_width(operations_menu))
         menubar.add_cascade(label="Операции", menu=operations_menu)
-        operations_menu.add_command(label="Создать папку", 
+        operations_menu.add_command(label="Создать папку".ljust(menu_width), 
                                   command=self._create_folder,
                                   accelerator="⌘N" if sys.platform == 'darwin' else "Ctrl+N")
-        operations_menu.add_command(label="Загрузить файлы", 
+        operations_menu.add_command(label="Загрузить файлы".ljust(menu_width), 
                                   command=self._upload_files,
                                   accelerator="⌘U" if sys.platform == 'darwin' else "Ctrl+U")
-        operations_menu.add_command(label="Скачать файлы", 
+        operations_menu.add_command(label="Скачать файлы".ljust(menu_width), 
                                   command=self._download_files,
                                   accelerator="⌘D" if sys.platform == 'darwin' else "Ctrl+D")
         operations_menu.add_separator()
-        operations_menu.add_command(label="Обновить списки", 
+        operations_menu.add_command(label="Обновить списки".ljust(menu_width), 
                                   command=self._refresh_lists,
                                   accelerator="F5 / ⌘R" if sys.platform == 'darwin' else "F5 / Ctrl+R")
 
         settings_menu = tk.Menu(menubar, tearoff=False)
+        settings_menu.config(postcommand=lambda: self._adjust_menu_width(settings_menu))
         menubar.add_cascade(label="Настройки", menu=settings_menu)
-        settings_menu.add_command(label="Параметры", 
+        settings_menu.add_command(label="Параметры".ljust(menu_width), 
                                 command=self._show_settings,
                                 accelerator="⌘," if sys.platform == 'darwin' else "Ctrl+,")
 
         help_menu = tk.Menu(menubar, tearoff=False)
+        help_menu.config(postcommand=lambda: self._adjust_menu_width(help_menu))
         menubar.add_cascade(label="Справка", menu=help_menu)
-        help_menu.add_command(label="О программе", 
+        help_menu.add_command(label="О программе".ljust(menu_width), 
                             command=self._show_about)
 
         self['menu'] = menubar
+
+    def _adjust_menu_width(self, menu):
+        try:
+            labels = []
+            for i in range(menu.index('end') + 1):
+                try:
+                    if menu.type(i) == 'command':
+                        labels.append(menu.entrycget(i, 'label'))
+                except:
+                    pass
+
+            max_width = max(len(label) for label in labels if label)
+
+            for i in range(menu.index('end') + 1):
+                try:
+                    if menu.type(i) == 'command':
+                        current_label = menu.entrycget(i, 'label').rstrip()
+                        menu.entryconfig(i, label=current_label.ljust(max_width + 5))
+                except:
+                    pass
+        except:
+            pass
 
     def _create_toolbar(self):
         toolbar = ttk.Frame(self)
@@ -192,26 +226,19 @@ class Application(tk.Tk):
         self._refresh_local_list()
 
     def _setup_bindings(self):
-        # Двойной клик
         self.local_files.bind("<Double-1>", self._on_local_double_click)
         self.remote_files.bind("<Double-1>", self._on_remote_double_click)
-        
-        # Горячие клавиши для всего приложения
         self.bind_all("<F5>", lambda e: self._refresh_lists())
         self.bind_all("<Escape>", lambda e: self._toggle_fullscreen())
-        
-        # Навигация с отладочным выводом
         def handle_backspace(event):
             debug_log(f"\nDEBUG: Нажата клавиша: BackSpace")
             debug_log(f"DEBUG: Событие: {event}")
             debug_log(f"DEBUG: Keysym: {event.keysym}")
             debug_log(f"DEBUG: Keycode: {event.keycode}")
             debug_log(f"DEBUG: Char: {event.char if hasattr(event, 'char') else 'Нет символа'}")
-            
-            # Если это клавиша Delete (проверяем по keycode)
+
             if event.keycode == 855638143:
                 debug_log("DEBUG: Обработка удаления файла")
-                # Определяем, какая панель в фокусе
                 if self.local_files.focus_get() == self.local_files:
                     debug_log("DEBUG: Удаление из локальной панели")
                     self._delete_local()
@@ -245,14 +272,12 @@ class Application(tk.Tk):
                     
                     self._refresh_remote_list()
                 return "break"
-            # Иначе это действительно BackSpace
             return self._navigate_up()
             
         self.bind_all("<BackSpace>", handle_backspace)
         self.bind_all("<Alt-Left>", lambda e: self._navigate_up())
         self.bind_all("<Alt-Up>", lambda e: self._navigate_up())
-        
-        # Предотвращаем действие клавиши Delete с отладкой
+
         def debug_delete(event):
             debug_log(f"\nDEBUG: Нажата клавиша Delete")
             debug_log(f"DEBUG: Событие: {event}")
@@ -262,20 +287,15 @@ class Application(tk.Tk):
             return "break"
             
         self.bind_all("<Delete>", debug_delete)
-        
-        # Контекстное меню - привязываем к правой кнопке мыши
+
         if sys.platform == 'darwin':
-            # На macOS правая кнопка это Button-2
             self.local_files.bind("<Button-2>", self._show_local_menu)
             self.remote_files.bind("<Button-2>", self._show_remote_menu)
         else:
-            # На Windows/Linux правая кнопка это Button-3
             self.local_files.bind("<Button-3>", self._show_local_menu)
             self.remote_files.bind("<Button-3>", self._show_remote_menu)
-        
-        # Используем Command на macOS и Control на других системах
+
         if sys.platform == 'darwin':
-            # На macOS Command = Meta
             self.bind_all("<Meta-q>", lambda e: self._show_quick_connect())
             self.bind_all("<Meta-r>", lambda e: self._refresh_lists())
             self.bind_all("<Meta-u>", lambda e: self._upload_files())
@@ -284,13 +304,11 @@ class Application(tk.Tk):
             self.bind_all("<Meta-b>", lambda e: self._add_bookmark())
             self.bind_all("<Meta-h>", lambda e: self._show_connection_history())
             self.bind_all("<Meta-comma>", lambda e: self._show_settings())
-            
-            # Дополнительные клавиши для macOS
+
             self.bind_all("<Command-BackSpace>", lambda e: self._navigate_up())
             self.bind_all("<Command-Up>", lambda e: self._navigate_up())
             self.bind_all("<Command-Left>", lambda e: self._navigate_up())
-            
-            # Дублируем с Command для надежности
+
             self.bind_all("<Command-q>", lambda e: self._show_quick_connect())
             self.bind_all("<Command-r>", lambda e: self._refresh_lists())
             self.bind_all("<Command-u>", lambda e: self._upload_files())
@@ -308,15 +326,12 @@ class Application(tk.Tk):
             self.bind_all("<Control-b>", lambda e: self._add_bookmark())
             self.bind_all("<Control-h>", lambda e: self._show_connection_history())
             self.bind_all("<Control-comma>", lambda e: self._show_settings())
-        
-        # Создаем контекстные меню
+
         self._create_context_menus()
 
     def _create_context_menus(self):
-        """Создание контекстных меню"""
         debug_log("\nDEBUG: Создание контекстных меню")
-        
-        # Локальное контекстное меню
+
         self.local_menu = tk.Menu(self, tearoff=0)
         self.local_menu.add_command(label="Открыть", command=self._open_local_file)
         self.local_menu.add_separator()
@@ -328,7 +343,6 @@ class Application(tk.Tk):
         self.local_menu.add_separator()
         self.local_menu.add_command(label="Загрузить на сервер", command=self._upload_files)
 
-        # Удаленное контекстное меню
         self.remote_menu = tk.Menu(self, tearoff=0)
         self.remote_menu.add_command(label="Скачать", command=self._download_files)
         self.remote_menu.add_separator()
@@ -339,25 +353,20 @@ class Application(tk.Tk):
         self.remote_menu.add_command(label="Удалить", command=self._delete_remote)
 
     def _show_local_menu(self, event):
-        """Показ локального контекстного меню"""
         debug_log("\nDEBUG: Вызов локального контекстного меню")
         
         item = self.local_files.identify_row(event.y)
         if item:
             debug_log(f"DEBUG: Выбран элемент {item}")
-            # Снимаем текущее выделение, если не зажат Ctrl/Command
-            if not (event.state & 0x0004):  # 0x0004 это Control на Windows/Linux
+            if not (event.state & 0x0004):
                 for selected_item in self.local_files.selection():
                     self.local_files.selection_remove(selected_item)
-            # Выделяем элемент под курсором
             self.local_files.selection_add(item)
-            # Показываем меню
             self.local_menu.post(event.x_root, event.y_root)
             debug_log(f"DEBUG: Меню показано в координатах {event.x_root}, {event.y_root}")
         return "break"
 
     def _show_remote_menu(self, event):
-        """Показ удаленного контекстного меню"""
         debug_log("\nDEBUG: Вызов удаленного контекстного меню")
         
         if not self.ftp_client.ftp:
@@ -367,19 +376,15 @@ class Application(tk.Tk):
         item = self.remote_files.identify_row(event.y)
         if item:
             debug_log(f"DEBUG: Выбран элемент {item}")
-            # Снимаем текущее выделение, если не зажат Ctrl/Command
-            if not (event.state & 0x0004):  # 0x0004 это Control на Windows/Linux
+            if not (event.state & 0x0004):
                 for selected_item in self.remote_files.selection():
                     self.remote_files.selection_remove(selected_item)
-            # Выделяем элемент под курсором
             self.remote_files.selection_add(item)
-            # Показываем меню
             self.remote_menu.post(event.x_root, event.y_root)
             debug_log(f"DEBUG: Меню показано в координатах {event.x_root}, {event.y_root}")
         return "break"
 
     def _copy_files(self, source):
-        """Копирование файлов в буфер обмена"""
         self.clipboard_source = source
         self.clipboard_files = []
         
@@ -387,89 +392,102 @@ class Application(tk.Tk):
             selected = self.local_files.selection()
             for item_id in selected:
                 values = self.local_files.item(item_id)['values']
-                self.clipboard_files.append(values[0])
+                self.clipboard_files.append({
+                    'name': str(values[0]),
+                    'type': values[2]
+                })
         else:
             selected = self.remote_files.selection()
             for item_id in selected:
                 values = self.remote_files.item(item_id)['values']
-                self.clipboard_files.append(values[0])
+                self.clipboard_files.append({
+                    'name': str(values[0]),
+                    'type': values[2]
+                })
                 
         self.status_bar.set_status(f"Скопировано элементов: {len(self.clipboard_files)}")
 
     def _paste_files(self, target):
-        """Вставка файлов из буфера обмена"""
         if not hasattr(self, 'clipboard_files') or not self.clipboard_files:
             return
             
         if self.clipboard_source == target:
-            # Копирование в ту же панель - создаем копии файлов
             if target == 'local':
                 try:
-                    import shutil  # Импортируем здесь для уверенности
                     total = len(self.clipboard_files)
                     
-                    for i, filename in enumerate(self.clipboard_files, 1):
+                    for i, file_info in enumerate(self.clipboard_files, 1):
                         try:
+                            filename = str(file_info['name'])
                             src_path = os.path.join(self.settings.get('default_local_dir'), filename)
                             base, ext = os.path.splitext(filename)
                             new_name = f"{base} - копия{ext}"
                             dst_path = os.path.join(self.settings.get('default_local_dir'), new_name)
-                            
-                            # Проверяем существование файла
                             if os.path.exists(dst_path):
                                 if not messagebox.askyesno("Подтверждение", 
                                                          f"Файл {new_name} уже существует. Перезаписать?"):
                                     continue
-                                # Если файл существует и пользователь согласился перезаписать,
-                                # удаляем существующий файл/директорию
                                 if os.path.isdir(dst_path):
                                     shutil.rmtree(dst_path)
                                 else:
                                     os.remove(dst_path)
-                            
-                            # Копируем файл или директорию
-                            if os.path.isdir(src_path):
+
+                            if file_info['type'] == "Папка":
                                 shutil.copytree(src_path, dst_path)
                             else:
                                 shutil.copy2(src_path, dst_path)
                             
-                            # Обновляем прогресс
                             progress = (i / total) * 100
                             self.status_bar.set_progress(progress)
                             self.status_bar.set_status(f"Копирование {i}/{total}: {filename}")
                             
                         except Exception as e:
-                            error_msg = str(e)
-                            debug_log(f"DEBUG: Ошибка копирования {filename}: {error_msg}")
-                            messagebox.showerror("Ошибка", f"Не удалось скопировать {filename}: {error_msg}")
+                            messagebox.showerror("Ошибка", f"Не удалось скопировать {filename}: {str(e)}")
                     
                     self._refresh_local_list()
                     self.status_bar.set_status("Копирование завершено")
                     self.status_bar.set_progress(100)
                     
                 except Exception as e:
-                    error_msg = str(e)
-                    debug_log(f"DEBUG: Общая ошибка копирования: {error_msg}")
-                    self.status_bar.set_status(f"Ошибка копирования: {error_msg}", error=True)
-                    messagebox.showerror("Ошибка", f"Ошибка копирования: {error_msg}")
+                    self.status_bar.set_status(f"Ошибка копирования: {str(e)}", error=True)
+                    messagebox.showerror("Ошибка", f"Ошибка копирования: {str(e)}")
                 
-            else:  # remote
+            else:
                 if not self.ftp_client.ftp:
                     return
                     
                 def copy_thread():
                     try:
                         total = len(self.clipboard_files)
-                        for i, filename in enumerate(self.clipboard_files, 1):
+                        for i, file_info in enumerate(self.clipboard_files, 1):
+                            filename = str(file_info['name'])
                             base, ext = os.path.splitext(filename)
                             new_name = f"{base} - копия{ext}"
-                            
-                            # Обновляем прогресс
+
                             progress = (i - 1) / total * 100
                             self.schedule_update(lambda p=progress, f=filename: [
                                 self.status_bar.set_progress(p),
                                 self.status_bar.set_status(f"Копирование {i}/{total}: {f}")
                             ])
+                            try:
+                                if file_info['type'] == "Папка":
+                                    self.ftp_client.ftp.cwd(new_name)
+                                    self.ftp_client.ftp.cwd('..')
+                                else:
+                                    self.ftp_client.ftp.size(new_name)
+                                    
+                                if self.settings.get('confirm_overwrite', True):
+                                    confirm_event = threading.Event()
+                                    self.schedule_update(lambda: [
+                                        setattr(confirm_event, 'result',
+                                               messagebox.askyesno("Подтверждение",
+                                                                 f"Файл {new_name} уже существует. Перезаписать?"))
+                                    ])
+                                    confirm_event.wait()
+                                    if not confirm_event.result:
+                                        continue
+                            except:
+                                pass
                             
                             success, message = self.ftp_client.copy_file(filename, new_name)
                             if not success:
@@ -479,6 +497,11 @@ class Application(tk.Tk):
                                 ])
                                 return
 
+                            progress = (i / total) * 100
+                            self.schedule_update(lambda p=progress: [
+                                self.status_bar.set_progress(p)
+                            ])
+
                         self.schedule_update(lambda: [
                             self._refresh_remote_list(),
                             self.status_bar.set_status("Копирование завершено"),
@@ -486,17 +509,14 @@ class Application(tk.Tk):
                         ])
 
                     except Exception as e:
-                        error_msg = str(e)
-                        debug_log(f"DEBUG: Ошибка в потоке копирования: {error_msg}")
                         self.schedule_update(lambda: [
-                            messagebox.showerror("Ошибка", f"Ошибка копирования: {error_msg}"),
-                            self.status_bar.set_status(f"Ошибка копирования: {error_msg}", error=True)
+                            messagebox.showerror("Ошибка", f"Ошибка копирования: {str(e)}"),
+                            self.status_bar.set_status(f"Ошибка копирования: {str(e)}", error=True)
                         ])
 
                 Thread(target=copy_thread, daemon=True).start()
                 
         else:
-            # Копирование между панелями
             if self.clipboard_source == 'local':
                 self._upload_files()
             else:
@@ -505,7 +525,6 @@ class Application(tk.Tk):
         self.status_bar.set_status("Вставка завершена")
 
     def _open_local_file(self):
-        """Открытие локального файла"""
         selected = self.local_files.selection()
         if not selected:
             return
@@ -526,29 +545,22 @@ class Application(tk.Tk):
             self.status_bar.set_status(f"Ошибка открытия файла: {str(e)}", error=True)
 
     def _rename_local(self):
-        """Переименование локального файла"""
         selected = self.local_files.selection()
         if not selected:
             return
             
         values = self.local_files.item(selected[0])['values']
         old_name = str(values[0])
-        
-        # Создаем диалоговое окно
         dialog = tk.Toplevel(self)
         dialog.title("Переименовать")
         dialog.geometry("300x120")
         dialog.resizable(False, False)
         dialog.transient(self)
         dialog.grab_set()
-        
-        # Центрируем окно
         dialog.geometry("+%d+%d" % (
             self.winfo_rootx() + self.winfo_width()//2 - 150,
             self.winfo_rooty() + self.winfo_height()//2 - 60
         ))
-        
-        # Создаем и размещаем элементы
         frame = ttk.Frame(dialog, padding="10")
         frame.pack(fill=tk.BOTH, expand=True)
         
@@ -573,13 +585,11 @@ class Application(tk.Tk):
         
         ttk.Button(btn_frame, text="OK", command=rename, width=10).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Отмена", command=dialog.destroy, width=10).pack(side=tk.LEFT)
-        
-        # Привязываем Enter к кнопке OK
+
         dialog.bind('<Return>', lambda e: rename())
         dialog.bind('<Escape>', lambda e: dialog.destroy())
 
     def _perform_local_rename(self, old_name, new_name):
-        """Выполняет фактическое переименование локального файла"""
         try:
             current_dir = self.settings.get('default_local_dir')
             old_path = os.path.join(current_dir, old_name)
@@ -589,22 +599,17 @@ class Application(tk.Tk):
             debug_log(f"DEBUG: Текущая директория: {current_dir}")
             debug_log(f"DEBUG: Старый путь: {old_path}")
             debug_log(f"DEBUG: Новый путь: {new_path}")
-            
-            # Проверяем существование исходного файла
             if not os.path.exists(old_path):
                 error_msg = f"Файл '{old_name}' не найден в директории '{current_dir}'"
                 debug_log(f"DEBUG: {error_msg}")
                 self.status_bar.set_status(error_msg, error=True)
                 messagebox.showerror("Ошибка", error_msg)
                 return
-            
-            # Проверяем существование целевого файла
+
             if os.path.exists(new_path):
                 if not messagebox.askyesno("Подтверждение", 
                                          f"Файл {new_name} уже существует. Перезаписать?"):
                     return
-                # Если файл существует и пользователь согласился перезаписать,
-                # удаляем существующий файл
                 try:
                     if os.path.isdir(new_path):
                         import shutil
@@ -626,8 +631,6 @@ class Application(tk.Tk):
         except Exception as e:
             error_msg = str(e)
             debug_log(f"DEBUG: Ошибка переименования: {error_msg}")
-            
-            # Добавляем более понятные сообщения об ошибках
             if "Permission denied" in error_msg:
                 error_msg = "Отказано в доступе. Проверьте права на файл и директорию."
             elif "No such file or directory" in error_msg:
@@ -639,22 +642,17 @@ class Application(tk.Tk):
             messagebox.showerror("Ошибка", f"Не удалось переименовать файл: {error_msg}")
 
     def _create_local_dir(self):
-        """Создание локальной папки"""
-        # Создаем диалоговое окно
         dialog = tk.Toplevel(self)
         dialog.title("Создать папку")
         dialog.geometry("300x120")
         dialog.resizable(False, False)
         dialog.transient(self)
         dialog.grab_set()
-        
-        # Центрируем окно
         dialog.geometry("+%d+%d" % (
             self.winfo_rootx() + self.winfo_width()//2 - 150,
             self.winfo_rooty() + self.winfo_height()//2 - 60
         ))
-        
-        # Создаем и размещаем элементы
+
         frame = ttk.Frame(dialog, padding="10")
         frame.pack(fill=tk.BOTH, expand=True)
         
@@ -690,13 +688,11 @@ class Application(tk.Tk):
         
         ttk.Button(btn_frame, text="OK", command=create, width=10).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Отмена", command=dialog.destroy, width=10).pack(side=tk.LEFT)
-        
-        # Привязываем Enter к кнопке OK
+
         dialog.bind('<Return>', lambda e: create())
         dialog.bind('<Escape>', lambda e: dialog.destroy())
 
     def _rename_remote(self):
-        """Переименование удаленного файла"""
         if not self.ftp_client.ftp:
             messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
             return
@@ -704,25 +700,19 @@ class Application(tk.Tk):
         selected = self.remote_files.selection()
         if not selected:
             return
-            
         values = self.remote_files.item(selected[0])['values']
         old_name = str(values[0])
-        
-        # Создаем диалоговое окно
         dialog = tk.Toplevel(self)
         dialog.title("Переименовать")
         dialog.geometry("300x120")
         dialog.resizable(False, False)
         dialog.transient(self)
         dialog.grab_set()
-        
-        # Центрируем окно
         dialog.geometry("+%d+%d" % (
             self.winfo_rootx() + self.winfo_width()//2 - 150,
             self.winfo_rooty() + self.winfo_height()//2 - 60
         ))
-        
-        # Создаем и размещаем элементы
+
         frame = ttk.Frame(dialog, padding="10")
         frame.pack(fill=tk.BOTH, expand=True)
         
@@ -746,15 +736,14 @@ class Application(tk.Tk):
                     debug_log(f"DEBUG: Текущая директория: {self.ftp_client.get_current_directory()}")
                     debug_log(f"DEBUG: Старое имя: {old_name}")
                     debug_log(f"DEBUG: Новое имя: {new_name}")
-                    
-                    # Проверяем существование файла
+
                     try:
                         self.ftp_client.ftp.size(new_name)
                         if not messagebox.askyesno("Подтверждение", 
                                                  f"Файл {new_name} уже существует. Перезаписать?"):
                             return
                     except:
-                        pass  # Файл не существует, можно продолжать
+                        pass
                     
                     self.ftp_client.ftp.rename(old_name, new_name)
                     self._refresh_remote_list()
@@ -769,13 +758,10 @@ class Application(tk.Tk):
         
         ttk.Button(btn_frame, text="OK", command=rename, width=10).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Отмена", command=dialog.destroy, width=10).pack(side=tk.LEFT)
-        
-        # Привязываем Enter к кнопке OK
         dialog.bind('<Return>', lambda e: rename())
         dialog.bind('<Escape>', lambda e: dialog.destroy())
 
     def _create_remote_dir(self):
-        """Создание удаленной папки"""
         if not self.ftp_client.ftp:
             messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
             return
@@ -861,18 +847,12 @@ class Application(tk.Tk):
         self._save_connection_history()
 
     def _connect(self, host, port, user, password):
-        """Подключение к FTP серверу"""
-        # Если все параметры None - это сигнал на отключение
         if host is None and port is None and user is None and password is None:
             self._disconnect()
             return False
-
-        # Проверка входных данных
         if not host or not user or not password:
             messagebox.showerror("Ошибка", "Все поля должны быть заполнены")
             return False
-
-        # Проверка порта
         try:
             port = int(port)
             if port < 1 or port > 65535:
@@ -887,16 +867,16 @@ class Application(tk.Tk):
             if success:
                 self.status_bar.set_status("Подключено к серверу")
                 self.connection_panel.set_connected_state(True)
-                self.connection_menu.entryconfig("Отключиться", state="normal")
-                
-                # Сохраняем в историю
+                for i in range(self.connection_menu.index('end') + 1):
+                    try:
+                        if "Отключиться" in self.connection_menu.entrycget(i, 'label').strip():
+                            self.connection_menu.entryconfig(i, state="normal")
+                            break
+                    except:
+                        continue
                 self._add_to_history(host, port, user)
-                
-                # Запускаем мониторинг соединения
                 self.stats_panel.start_monitoring(host, port)
                 self.ftp_client.start_connection_monitor(self._on_connection_lost)
-                
-                # Обновляем списки
                 self._refresh_remote_list()
                 return True
             else:
@@ -905,6 +885,8 @@ class Application(tk.Tk):
                     error_msg = "Неверное имя пользователя или пароль"
                 elif "connection refused" in message.lower():
                     error_msg = "Подключение отклонено. Проверьте адрес и порт."
+                elif "[Errno 8]" in message:
+                    error_msg = "Не удалось найти сервер. Проверьте правильность введенного адреса."
                 
                 self.status_bar.set_status(error_msg, error=True)
                 messagebox.showerror("Ошибка подключения", error_msg)
@@ -916,6 +898,8 @@ class Application(tk.Tk):
                 error_msg = "Превышено время ожидания подключения"
             elif "connection refused" in error_msg.lower():
                 error_msg = "Подключение отклонено. Проверьте адрес и порт."
+            elif "[Errno 8]" in error_msg:
+                error_msg = "Не удалось найти сервер. Проверьте правильность введенного адреса."
             
             self.status_bar.set_status(error_msg, error=True)
             messagebox.showerror("Ошибка подключения", error_msg)
@@ -935,7 +919,13 @@ class Application(tk.Tk):
             self.connection_panel.set_connected_state(False)
             
             debug_log("DEBUG: Деактивируем пункт меню Отключиться")
-            self.connection_menu.entryconfig("Отключиться", state="disabled")
+            for i in range(self.connection_menu.index('end') + 1):
+                try:
+                    if "Отключиться" in self.connection_menu.entrycget(i, 'label').strip():
+                        self.connection_menu.entryconfig(i, state="disabled")
+                        break
+                except:
+                    continue
             
             debug_log("DEBUG: Очищаем список удаленных файлов")
             self.remote_files.delete(*self.remote_files.get_children())
@@ -952,7 +942,6 @@ class Application(tk.Tk):
             self.status_bar.set_status(f"Ошибка при отключении: {str(e)}", error=True)
 
     def _on_connection_lost(self):
-        """Обработчик потери соединения"""
         def update():
             self.status_bar.set_status("Соединение потеряно", error=True)
             self.connection_panel.set_connected_state(False)
@@ -960,8 +949,6 @@ class Application(tk.Tk):
             self.stats_panel.stop_monitoring()
             self.remote_files.clear()
             messagebox.showerror("Ошибка", "Соединение с сервером потеряно")
-            
-        # Используем schedule_update для безопасного обновления GUI из другого потока
         self.schedule_update(update)
 
     def _refresh_lists(self):
@@ -1406,7 +1393,7 @@ class Application(tk.Tk):
             total = len(selected)
             for i, item_id in enumerate(selected, 1):
                 values = self.local_files.item(item_id)['values']
-                filename = values[0]
+                filename = str(values[0])
                 is_dir = values[2] == "Папка"
                 local_path = os.path.join(self.settings.get('default_local_dir'), filename)
 
@@ -1427,14 +1414,14 @@ class Application(tk.Tk):
                         try:
                             self.ftp_client.ftp.mkd(filename)
                         except:
-                            pass  # Папка может уже существовать
+                            pass
                         self.ftp_client.ftp.cwd(filename)
 
                         for root, dirs, files in os.walk(local_path):
                             rel_path = os.path.relpath(root, local_path)
                             
                             if rel_path != '.':
-                                remote_path_parts = rel_path.split(os.sep)
+                                remote_path_parts = [str(part) for part in rel_path.split(os.sep)]
                                 for part in remote_path_parts:
                                     try:
                                         self.ftp_client.ftp.mkd(part)
@@ -1445,7 +1432,7 @@ class Application(tk.Tk):
                             for file in files:
                                 local_file = os.path.join(root, file)
                                 try:
-                                    self.ftp_client.ftp.size(file)
+                                    self.ftp_client.ftp.size(str(file))
                                     if self.settings.get('confirm_overwrite', True):
                                         if not messagebox.askyesno("Подтверждение", 
                                                                  f"Файл {file} уже существует. Перезаписать?"):
@@ -1454,7 +1441,7 @@ class Application(tk.Tk):
                                     pass
 
                                 with open(local_file, 'rb') as f:
-                                    self.ftp_client.ftp.storbinary(f'STOR {file}', f)
+                                    self.ftp_client.ftp.storbinary(f'STOR {str(file)}', f)
                                     
                                 progress = (i / total) * 100
                                 self.status_bar.set_progress(progress)
@@ -1472,7 +1459,7 @@ class Application(tk.Tk):
                         
                 else:
                     with open(local_path, 'rb') as f:
-                        self.ftp_client.ftp.storbinary(f'STOR {filename}', f)
+                        self.ftp_client.ftp.storbinary(f'STOR {str(filename)}', f)
                         progress = (i / total) * 100
                         self.status_bar.set_progress(progress)
                         self.status_bar.set_status(f"Загружен файл: {filename}")
@@ -1482,7 +1469,7 @@ class Application(tk.Tk):
             self.status_bar.set_progress(100)
 
         except Exception as e:
-            self.status_bar.set_status(f"Ошибка загрузки: {e}", error=True)
+            self.status_bar.set_status(f"Ошибка загрузки: {str(e)}", error=True)
             messagebox.showerror("Ошибка", f"Ошибка загрузки: {str(e)}")
 
     def _download_files(self):
@@ -1499,9 +1486,10 @@ class Application(tk.Tk):
             total = len(selected)
             for i, item_id in enumerate(selected, 1):
                 values = self.remote_files.item(item_id)['values']
-                filename = values[0]
+                filename = str(values[0])
                 is_dir = values[2] == "Папка"
                 local_path = os.path.join(self.settings.get('default_local_dir'), filename)
+                
                 if os.path.exists(local_path):
                     if self.settings.get('confirm_overwrite', True):
                         if not messagebox.askyesno("Подтверждение", 
@@ -1514,16 +1502,31 @@ class Application(tk.Tk):
                     try:
                         self.ftp_client.ftp.cwd(filename)
                         for item in self.ftp_client.list_files():
-                            name, _, type_, _ = item
-                            if type_ == "Файл":
-                                local_file = os.path.join(local_path, name)
-                                with open(local_file, 'wb') as f:
+                            name = str(item[0])
+                            item_type = item[2]
+                            item_path = os.path.join(local_path, name)
+                            
+                            if item_type == "Папка":
+                                os.makedirs(item_path, exist_ok=True)
+                                sub_remote = self.ftp_client.ftp.pwd()
+                                try:
+                                    self.ftp_client.ftp.cwd(name)
+                                    for sub_item in self.ftp_client.list_files():
+                                        sub_name = str(sub_item[0])
+                                        if sub_item[2] == "Файл":
+                                            sub_path = os.path.join(item_path, sub_name)
+                                            with open(sub_path, 'wb') as f:
+                                                self.ftp_client.ftp.retrbinary(f'RETR {sub_name}', f.write)
+                                finally:
+                                    self.ftp_client.ftp.cwd(sub_remote)
+                            else:
+                                with open(item_path, 'wb') as f:
                                     self.ftp_client.ftp.retrbinary(f'RETR {name}', f.write)
                     finally:
                         self.ftp_client.ftp.cwd(current_remote)
                 else:
                     with open(local_path, 'wb') as f:
-                        self.ftp_client.ftp.retrbinary(f'RETR {filename}', f.write)
+                        self.ftp_client.ftp.retrbinary(f'RETR {str(filename)}', f.write)
 
                 progress = (i / total) * 100
                 self.status_bar.set_progress(progress)
@@ -1535,14 +1538,14 @@ class Application(tk.Tk):
 
         except Exception as e:
             self.status_bar.set_status(f"Ошибка скачивания: {str(e)}", error=True)
+            messagebox.showerror("Ошибка", f"Ошибка скачивания: {str(e)}")
 
     def _delete_selected(self):
-        """Обработчик удаления выбранных элементов"""
         if self.local_files.focus():
             self._delete_local()
         elif self.remote_files.focus() and self.ftp_client.ftp:
             self._delete_remote()
-        return "break"  # Предотвращаем дальнейшую обработку события
+        return "break"
 
     def _on_local_double_click(self, event):
         item = self.local_files.identify('item', event.x, event.y)
@@ -1642,7 +1645,6 @@ class Application(tk.Tk):
             self._navigate_up_remote()
 
     def _on_drag_start(self, event):
-        """Начало перетаскивания"""
         tree = event.widget
         item = tree.identify_row(event.y)
         if item:
@@ -1655,20 +1657,14 @@ class Application(tk.Tk):
             }
 
     def _on_drag_motion(self, event):
-        """Процесс перетаскивания"""
         if hasattr(self, '_drag_data'):
-            # Можно добавить визуальный эффект перетаскивания, если нужно
             pass
 
     def _on_drag_end(self, event):
-        """Окончание перетаскивания"""
         if not hasattr(self, '_drag_data'):
             return
-
         source = self._drag_data['source']
         target = event.widget
-
-        # Если перетаскивание между разными списками
         if source != target:
             if source == self.local_files and target == self.remote_files:
                 self._upload_selected()
@@ -1678,7 +1674,6 @@ class Application(tk.Tk):
         del self._drag_data
 
     def _upload_selected(self):
-        """Загрузка выбранных файлов на сервер"""
         if not self.ftp_client.ftp:
             messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
             return
@@ -1695,8 +1690,6 @@ class Application(tk.Tk):
                     filename = str(values[0])
                     is_dir = values[2] == "Папка"
                     local_path = os.path.join(self.settings.get('default_local_dir'), filename)
-
-                    # Проверяем существование файла на сервере
                     try:
                         if is_dir:
                             self.ftp_client.ftp.cwd(filename)
@@ -1717,7 +1710,6 @@ class Application(tk.Tk):
                     except:
                         pass
 
-                    # Обновляем прогресс
                     progress = (i - 1) / total * 100
                     self.schedule_update(lambda p=progress, f=filename: [
                         self.status_bar.set_progress(p),
@@ -1751,7 +1743,6 @@ class Application(tk.Tk):
         Thread(target=upload_thread, daemon=True).start()
 
     def _download_selected(self):
-        """Скачивание выбранных файлов с сервера"""
         if not self.ftp_client.ftp:
             messagebox.showwarning("Ошибка", "Сначала подключитесь к серверу")
             return
@@ -1768,8 +1759,6 @@ class Application(tk.Tk):
                     filename = str(values[0])
                     is_dir = values[2] == "Папка"
                     local_path = os.path.join(self.settings.get('default_local_dir'), filename)
-
-                    # Проверяем существование файла локально
                     if os.path.exists(local_path):
                         if self.settings.get('confirm_overwrite', True):
                             confirm_event = threading.Event()
@@ -1782,7 +1771,6 @@ class Application(tk.Tk):
                             if not confirm_event.result:
                                 continue
 
-                    # Обновляем прогресс
                     progress = (i - 1) / total * 100
                     self.schedule_update(lambda p=progress, f=filename: [
                         self.status_bar.set_progress(p),
@@ -1795,7 +1783,7 @@ class Application(tk.Tk):
                         try:
                             self.ftp_client.ftp.cwd(filename)
                             for item in self.ftp_client.list_files():
-                                name = str(item[0])  # Явное преобразование имени в строку
+                                name = str(item[0])
                                 item_type = item[2]
                                 if item_type == "Файл":
                                     local_file = os.path.join(local_path, name)
@@ -1827,9 +1815,12 @@ class Application(tk.Tk):
         Thread(target=download_thread, daemon=True).start()
 
     def _delete_local(self):
-        """Удаление локальных файлов"""
         selected = self.local_files.selection()
         if not selected:
+            return
+            
+        if not messagebox.askyesno("Подтверждение", 
+                                 "Вы действительно хотите удалить выбранные файлы?"):
             return
             
         try:
@@ -1851,7 +1842,6 @@ class Application(tk.Tk):
             messagebox.showerror("Ошибка", f"Не удалось удалить файл(ы): {str(e)}")
 
     def _delete_remote(self):
-        """Удаление файлов на сервере"""
         if not self.ftp_client.ftp:
             return
             
@@ -1882,7 +1872,7 @@ class Application(tk.Tk):
                         if messagebox.askyesno("Подтверждение", 
                                              f"Папка '{filename}' не пуста. Удалить её содержимое?"):
                             success, message = self.ftp_client.delete_directory_recursive(filename)
-                    if not success:  # Если все еще неуспешно
+                    if not success:
                         messagebox.showerror("Ошибка", f"Не удалось удалить {filename}: {message}")
                     
             self._refresh_remote_list()
@@ -1892,7 +1882,6 @@ class Application(tk.Tk):
             messagebox.showerror("Ошибка", f"Не удалось удалить файл(ы): {str(e)}")
 
     def _on_closing(self):
-        """Обработчик закрытия окна"""
         if not messagebox.askyesno("Подтверждение", "Вы действительно хотите выйти из программы?"):
             return
             
