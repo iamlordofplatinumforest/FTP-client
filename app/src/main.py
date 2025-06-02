@@ -35,6 +35,7 @@ class Application(tk.Tk):
         super().__init__()
 
         self.title("FTP Client")
+        self.protocol("WM_DELETE_WINDOW", self._on_closing)
 
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
@@ -1269,6 +1270,29 @@ class Application(tk.Tk):
             self._navigate_up_local()
         elif self.remote_files.focus() and self.ftp_client.ftp:
             self._navigate_up_remote()
+
+    def _on_closing(self):
+        """Обработчик закрытия окна"""
+        if not messagebox.askyesno("Подтверждение", "Вы действительно хотите выйти из программы?"):
+            return
+            
+        debug_log("\nDEBUG: Начало закрытия приложения")
+        
+        try:
+            debug_log("DEBUG: Останавливаем мониторинг статистики")
+            self.stats_panel.stop_monitoring()
+            
+            debug_log("DEBUG: Отключаемся от FTP сервера")
+            self.ftp_client.disconnect()
+            
+            debug_log("DEBUG: Сохраняем настройки")
+            self.settings.save_settings()
+            
+            debug_log("DEBUG: Закрытие приложения завершено")
+        except Exception as e:
+            debug_log(f"DEBUG: Ошибка при закрытии приложения: {str(e)}")
+        finally:
+            self.quit()
 
 
 if __name__ == "__main__":
