@@ -12,7 +12,6 @@ from src.core.settings import Settings
 
 
 def debug_log(message: str):
-    """Логирование отладочной информации"""
     print(message, file=sys.stderr, flush=True)
 
 
@@ -32,7 +31,6 @@ class FTPClient:
         debug_log("\nDEBUG: FTPClient: Начало подключения")
         try:
             with self.ftp_lock:
-                # Если есть активное подключение, сначала отключаемся
                 if self.ftp:
                     debug_log("DEBUG: FTPClient: Закрываем предыдущее подключение")
                     try:
@@ -58,7 +56,6 @@ class FTPClient:
                 return True, "Успешное подключение"
         except Exception as e:
             debug_log(f"DEBUG: FTPClient: Ошибка подключения: {str(e)}")
-            # Очищаем объект FTP при ошибке
             self.ftp = None
             self.connection_params = None
             return False, str(e)
@@ -153,7 +150,7 @@ class FTPClient:
         return items
 
     def download_file(self, remote_file: str, local_path: str,
-                     progress_callback=None) -> Tuple[bool, str]:
+                      progress_callback=None) -> Tuple[bool, str]:
         if not self.ftp:
             return False, "Нет подключения"
 
@@ -187,7 +184,7 @@ class FTPClient:
             return False, str(e)
 
     def upload_file(self, local_path: str, remote_file: str,
-                   progress_callback=None) -> Tuple[bool, str]:
+                    progress_callback=None) -> Tuple[bool, str]:
         if not self.ftp:
             return False, "Нет подключения"
 
@@ -219,7 +216,7 @@ class FTPClient:
             return False, str(e)
 
     def upload_folder(self, local_path: str, remote_folder: str,
-                     progress_callback=None) -> Tuple[bool, str]:
+                      progress_callback=None) -> Tuple[bool, str]:
         try:
             with self.ftp_lock:
                 try:
@@ -277,7 +274,6 @@ class FTPClient:
             return False, str(e)
 
     def delete_item(self, name: str) -> Tuple[bool, str]:
-        """Удаление файла или пустой директории"""
         if not self.ftp:
             return False, "Нет подключения"
 
@@ -291,8 +287,7 @@ class FTPClient:
             with self.ftp_lock:
                 current_dir = self.ftp.pwd()
                 debug_log(f"DEBUG: Текущая директория: {current_dir}")
-                
-                # Определяем тип элемента
+
                 try:
                     debug_log(f"DEBUG: Проверяем, является ли {name} директорией")
                     self.ftp.cwd(name)
@@ -313,7 +308,7 @@ class FTPClient:
 
                         dir_items = [item for item in dir_items if item not in ('.', '..')]
                         debug_log(f"DEBUG: Найдено элементов в директории: {len(dir_items)}")
-                        
+
                         if dir_items:
                             debug_log("DEBUG: Директория не пуста")
                             return False, "NOT_EMPTY_DIR"
@@ -345,7 +340,6 @@ class FTPClient:
             return False, str(e)
 
     def delete_directory_recursive(self, dirname: str) -> Tuple[bool, str]:
-        """Рекурсивное удаление директории и всего её содержимого"""
         if not self.ftp:
             return False, "Нет подключения"
 
@@ -353,11 +347,8 @@ class FTPClient:
 
         try:
             with self.ftp_lock:
-                # Сохраняем текущую директорию
                 current_dir = self.ftp.pwd()
                 debug_log(f"DEBUG: Текущая директория: {current_dir}")
-                
-                # Переходим в удаляемую директорию
                 try:
                     debug_log(f"DEBUG: Пытаемся перейти в директорию {dirname}")
                     self.ftp.cwd(dirname)
@@ -367,13 +358,13 @@ class FTPClient:
                     debug_log(f"DEBUG: Ошибка при переходе в директорию: {str(e)}")
                     return False, f"Не удалось перейти в директорию {dirname}: {str(e)}"
 
-                # Получаем список файлов
                 try:
                     files = []
+
                     def list_callback(line):
                         debug_log(f"DEBUG: Получена строка листинга: {line}")
                         files.append(line)
-                    
+
                     debug_log("DEBUG: Запрашиваем список файлов")
                     self.ftp.retrlines('LIST', list_callback)
                     debug_log(f"DEBUG: Получен список файлов: {len(files)} элементов")
@@ -382,16 +373,12 @@ class FTPClient:
                     self.ftp.cwd(current_dir)
                     return False, f"Не удалось получить список файлов: {str(e)}"
 
-                # Обрабатываем каждый элемент
                 for file_info in files:
                     debug_log(f"DEBUG: Обработка элемента: {file_info}")
-                    
-                    # Пропускаем . и ..
+
                     if file_info.endswith('.') or file_info.endswith('..'):
                         debug_log("DEBUG: Пропускаем специальную директорию")
                         continue
-
-                    # Разбираем информацию о файле
                     parts = file_info.split(maxsplit=8)
                     if len(parts) < 9:
                         debug_log("DEBUG: Некорректный формат строки листинга")
@@ -404,10 +391,8 @@ class FTPClient:
                     try:
                         if is_dir:
                             debug_log(f"DEBUG: Удаляем содержимое поддиректории: {name}")
-                            # Сначала переходим в поддиректорию
                             self.ftp.cwd(name)
-                            
-                            # Удаляем все файлы в поддиректории
+
                             subfiles = []
                             self.ftp.retrlines('LIST', subfiles.append)
                             for subfile_info in subfiles:
@@ -422,11 +407,8 @@ class FTPClient:
                                     else:
                                         debug_log(f"DEBUG: Удаляем файл в поддиректории: {subname}")
                                         self.ftp.delete(subname)
-                            
-                            # Возвращаемся в родительскую директорию
                             self.ftp.cwd('..')
-                            
-                            # Удаляем саму поддиректорию
+
                             debug_log(f"DEBUG: Удаляем пустую поддиректорию: {name}")
                             self.ftp.rmd(name)
                             debug_log(f"DEBUG: Поддиректория {name} успешно удалена")
@@ -439,11 +421,9 @@ class FTPClient:
                         self.ftp.cwd(current_dir)
                         return False, f"Ошибка при удалении {name}: {str(e)}"
 
-                # Возвращаемся в исходную директорию
                 debug_log(f"DEBUG: Возвращаемся в исходную директорию: {current_dir}")
                 self.ftp.cwd(current_dir)
 
-                # Удаляем саму директорию
                 try:
                     debug_log(f"DEBUG: Удаляем исходную директорию: {dirname}")
                     self.ftp.rmd(dirname)
@@ -455,7 +435,7 @@ class FTPClient:
                     if "550" in error_msg:
                         debug_log("DEBUG: Ошибка 550 - возможно, директория не пуста или нет прав")
                     return False, f"Не удалось удалить директорию {dirname}: {error_msg}"
-                    
+
         except Exception as e:
             debug_log(f"DEBUG: Критическая ошибка: {str(e)}")
             return False, str(e)
@@ -493,22 +473,20 @@ class FTPClient:
             return "/"
 
     def _parse_ftp_time(self, time_str: str) -> str:
-        """Парсинг времени из FTP-листинга с учетом UTC"""
         try:
             current_year = datetime.now().year
             months = {
                 'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
                 'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12
             }
-            
+
             parts = time_str.split()
             if len(parts) != 3:
                 return time_str
-                
+
             month = months.get(parts[0], 1)
             day = int(parts[1])
-            
-            if ':' in parts[2]:  # Формат времени ЧЧ:ММ
+            if ':' in parts[2]:
                 hour, minute = map(int, parts[2].split(':'))
                 year = current_year
 
@@ -528,11 +506,11 @@ class FTPClient:
             return time_str
 
     def _get_optimal_buffer_size(self, file_size: int) -> int:
-        if file_size < 1024 * 1024:  # < 1MB
+        if file_size < 1024 * 1024:
             return 8192
-        elif file_size < 10 * 1024 * 1024:  # < 10MB
+        elif file_size < 10 * 1024 * 1024:    
             return 32768
-        else:  # >= 10MB
+        else:    
             return 65536
 
     def start_connection_monitor(self, on_connection_lost: Callable):
@@ -566,44 +544,37 @@ class FTPClient:
             self.monitor_thread = None
 
     def copy_file(self, source: str, destination: str) -> Tuple[bool, str]:
-        """Копирование файла на FTP сервере"""
+         
         if not self.ftp:
             return False, "Нет подключения"
 
         debug_log(f"\nDEBUG: Начинаем копирование файла {source} -> {destination}")
-        
+
         try:
             with self.ftp_lock:
-                # Проверяем, является ли источник директорией
                 try:
                     current_dir = self.ftp.pwd()
                     self.ftp.cwd(source)
                     self.ftp.cwd(current_dir)
-                    # Если мы здесь, значит source - это директория
                     debug_log("DEBUG: Источник является директорией")
                     return self.copy_directory(source, destination)
                 except:
-                    # Если не удалось перейти, значит это файл
                     debug_log("DEBUG: Источник является файлом")
                     pass
 
-                # Создаем временный файл для копирования
                 import tempfile
                 with tempfile.NamedTemporaryFile(delete=False) as temp_file:
                     temp_path = temp_file.name
                     debug_log(f"DEBUG: Создан временный файл: {temp_path}")
-                    
+
                     try:
-                        # Скачиваем исходный файл
                         debug_log(f"DEBUG: Скачиваем файл {source}")
                         self.ftp.retrbinary(f'RETR {source}', temp_file.write)
-                        temp_file.close()  # Закрываем файл после записи
-                        
-                        # Загружаем файл с новым именем
+                        temp_file.close()
                         debug_log(f"DEBUG: Загружаем файл как {destination}")
                         with open(temp_path, 'rb') as f:
                             self.ftp.storbinary(f'STOR {destination}', f)
-                        
+
                         debug_log("DEBUG: Копирование успешно завершено")
                         return True, "Файл успешно скопирован"
                     finally:
@@ -619,17 +590,14 @@ class FTPClient:
             return False, f"Ошибка копирования файла: {error_msg}"
 
     def copy_directory(self, source: str, destination: str) -> Tuple[bool, str]:
-        """Копирование директории на FTP сервере"""
         if not self.ftp:
             return False, "Нет подключения"
 
         debug_log(f"\nDEBUG: Начинаем копирование директории {source} -> {destination}")
-        
+
         try:
             with self.ftp_lock:
                 current_dir = self.ftp.pwd()
-                
-                # Создаем новую директорию
                 try:
                     debug_log(f"DEBUG: Создаем директорию {destination}")
                     self.ftp.mkd(destination)
@@ -638,69 +606,65 @@ class FTPClient:
                     pass
 
                 try:
-                    # Переходим в исходную директорию
                     debug_log(f"DEBUG: Переходим в исходную директорию {source}")
                     self.ftp.cwd(source)
                     source_dir = self.ftp.pwd()
-                    
-                    # Получаем список файлов в исходной директории
+
+                      
                     items = []
+
                     def list_callback(line):
                         items.append(line)
+
                     self.ftp.retrlines('LIST', list_callback)
                     debug_log(f"DEBUG: Получен список файлов: {len(items)} элементов")
-                    
-                    # Возвращаемся в исходную директорию и переходим в целевую
+
+                      
                     self.ftp.cwd(current_dir)
                     self.ftp.cwd(destination)
                     dest_dir = self.ftp.pwd()
-                    
-                    # Копируем каждый элемент
+
                     for item in items:
                         parts = item.split(maxsplit=8)
                         if len(parts) < 9:
                             continue
-                            
+
                         name = parts[8]
                         if name in ('.', '..'):
                             continue
-                            
+
                         is_dir = item.startswith('d')
-                        
+
                         if is_dir:
                             debug_log(f"DEBUG: Копируем поддиректорию {name}")
-                            # Создаем поддиректорию
                             try:
                                 self.ftp.mkd(name)
                             except:
                                 pass
-                            
-                            # Рекурсивно копируем содержимое
-                            self.ftp.cwd(source_dir)  # Возвращаемся в исходную директорию
+
+                            self.ftp.cwd(source_dir)    
                             success, message = self.copy_directory(f"{source}/{name}", f"{destination}/{name}")
                             if not success:
                                 debug_log(f"DEBUG: Ошибка копирования поддиректории: {message}")
                                 return False, f"Ошибка копирования поддиректории {name}: {message}"
-                            self.ftp.cwd(dest_dir)  # Возвращаемся в целевую директорию
+                            self.ftp.cwd(dest_dir)    
                         else:
                             debug_log(f"DEBUG: Копируем файл {name}")
-                            # Создаем временный файл для копирования
+                              
                             import tempfile
                             with tempfile.NamedTemporaryFile(delete=False) as temp_file:
                                 temp_path = temp_file.name
                                 debug_log(f"DEBUG: Создан временный файл: {temp_path}")
-                                
+
                                 try:
-                                    # Скачиваем файл из исходной директории
                                     self.ftp.cwd(source_dir)
                                     self.ftp.retrbinary(f'RETR {name}', temp_file.write)
                                     temp_file.close()
-                                    
-                                    # Загружаем файл в целевую директорию
+
                                     self.ftp.cwd(dest_dir)
                                     with open(temp_path, 'rb') as f:
                                         self.ftp.storbinary(f'STOR {name}', f)
-                                        
+
                                     debug_log(f"DEBUG: Файл {name} успешно скопирован")
                                 finally:
                                     try:
@@ -708,12 +672,11 @@ class FTPClient:
                                         debug_log("DEBUG: Временный файл удален")
                                     except:
                                         pass
-                    
+
                     debug_log("DEBUG: Копирование директории успешно завершено")
                     return True, "Директория успешно скопирована"
-                    
+
                 finally:
-                    # Возвращаемся в исходную директорию
                     try:
                         self.ftp.cwd(current_dir)
                     except:

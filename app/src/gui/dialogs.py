@@ -227,7 +227,6 @@ class AboutDialog:
         self.dialog.transient(parent)
         self.dialog.grab_set()
 
-        # Центрируем окно
         self.dialog.geometry("+%d+%d" % (
             parent.winfo_rootx() + parent.winfo_width()//2 - 300,
             parent.winfo_rooty() + parent.winfo_height()//2 - 250
@@ -236,13 +235,11 @@ class AboutDialog:
         main_frame = ttk.Frame(self.dialog, padding="20")
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Заголовок
         title_label = ttk.Label(main_frame, 
                               text="FTP Клиент",
                               font=('Helvetica', 16, 'bold'))
         title_label.pack(pady=(0, 10))
 
-        # Версия
         version_label = ttk.Label(main_frame,
                                 text="Версия 1.0.0")
         version_label.pack(pady=(0, 20))
@@ -251,11 +248,9 @@ class AboutDialog:
                                   text="Ефросинья Сологуб, 2025 год")
         dev_label.pack(pady=(0, 20))
 
-        # Создаем notebook для вкладок
         notebook = ttk.Notebook(main_frame)
         notebook.pack(fill=tk.BOTH, expand=True)
 
-        # Вкладка с описанием
         desc_frame = ttk.Frame(notebook, padding="10")
         notebook.add(desc_frame, text="Описание")
 

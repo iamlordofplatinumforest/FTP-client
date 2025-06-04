@@ -7,7 +7,7 @@ class ConnectionStatsPanel(ttk.LabelFrame):
     def __init__(self, parent):
         super().__init__(parent, text="Статистика соединения")
         
-        # Создаем метки для отображения статистики
+           
         self.latency_label = ttk.Label(self, text="Задержка: --")
         self.latency_label.pack(anchor="w", padx=5, pady=2)
         
@@ -37,27 +37,23 @@ class ConnectionStatsPanel(ttk.LabelFrame):
         self.last_check_label.config(text="Последняя проверка: --")
             
     def update_stats(self):
-        """Обновление статистики соединения"""
         if self.monitor:
             stats = self.monitor.get_stats()
-            
-            # Форматируем задержку
+
             latency = stats['latency']
             if latency > 0:
                 latency_text = f"Задержка: {latency:.1f} мс"
             else:
                 latency_text = "Задержка: --"
             self.latency_label.config(text=latency_text)
-            
-            # Форматируем потери пакетов
+
             packet_loss = stats['packet_loss']
             if packet_loss >= 0:
                 packet_loss_text = f"Потери пакетов: {packet_loss:.1f}%"
             else:
                 packet_loss_text = "Потери пакетов: --"
             self.packet_loss_label.config(text=packet_loss_text)
-            
-            # Форматируем время последней проверки
+
             last_check = stats['last_check']
             if last_check > 0:
                 last_check_time = time.strftime("%H:%M:%S", time.localtime(last_check))
@@ -65,6 +61,5 @@ class ConnectionStatsPanel(ttk.LabelFrame):
             else:
                 last_check_text = "Последняя проверка: --"
             self.last_check_label.config(text=last_check_text)
-            
-            # Обновляем каждые 500 мс
+
             self.after(500, self.update_stats) 
